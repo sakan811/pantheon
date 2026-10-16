@@ -95,10 +95,15 @@ int main (int argc, char** argv)
         const auto eight = static_cast<size_t> (std::lround (themis::BandGrid::indexForHz (8000)));
         std::printf ("    pink noise: %.2f dB @1k, %.2f dB @8k (relative to anchor mean)\n", m[one], m[eight]);
         CHECK (std::abs (m[one]) < 1.5f && std::abs (m[eight]) < 1.5f);
+        float crest = 0.0f;
+        CHECK (proc.readLowCrest (crest), "low-end crest meter should have data after 14 s");
+        std::printf ("    low-end crest of pink noise: %.2f dB\n", crest);
+        CHECK (crest > 6.0f && crest < 16.0f, "noise crest factor should be a plausible 8-14 dB");
         proc.resetAnalyzer();
         runAudio (proc, 0.1, fs, 512, 0.5f, 1);
         settle();
         CHECK (!proc.readSpectrum (m), "reset should clear the curve");
+        CHECK (!proc.readLowCrest (crest), "reset should clear the low-end crest");
     }
 
     std::printf ("[2] averaging parameter reaches the analyser setting\n");

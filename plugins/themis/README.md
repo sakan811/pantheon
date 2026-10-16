@@ -17,8 +17,8 @@ audio passes through bit-for-bit unchanged with zero latency, so it is safe to l
 
 | Area | What it does |
 |---|---|
-| **Tonal balance curve** | 1/6-octave long-term spectrum (20 Hz–20 kHz) vs a target *median ± tolerance* band. Segments turn green / amber / red as you leave the band. Four broadband readouts (Low / Low-Mid / High-Mid / High) show your average offset from target. Averaging: 10 s / 30 s / 2 min / infinite; **Reset** restarts it. |
-| **Target curves** | 7 built-in starter curves (Flat, Modern Pop, Hip-Hop, EDM, Rock, Acoustic, Orchestral) **+ "Learn from tracks…"**: pick one or more reference masters (wav/aiff/flac/mp3/m4a/ogg) and Themis builds a target from their average, with the tolerance set by how much they disagree. Save/load as `.themiscurve`. |
+| **Tonal balance curve** | 1/6-octave long-term spectrum (20 Hz–20 kHz) vs a target *median ± tolerance* band. Segments turn green / amber / red as you leave the band. Four broadband readouts (Low / Low-Mid / High-Mid / High) show your average offset from target. A **Low Crest** meter (like TBC's Low End Crest Factor) shows the peak/RMS ratio of the 20–250 Hz band in dB: left = dynamic, right = compressed; its "typical" zone (6–10 dB) is a hand-authored guess. Averaging: 10 s / 30 s / 2 min / infinite; **Reset** restarts it. |
+| **Target curves** | 7 built-in starter curves (Flat, Modern Pop, Hip-Hop, EDM, Rock, Acoustic, Orchestral) **+ "Learn from tracks…"**: pick one or more reference masters (wav/aiff/flac/ogg everywhere; mp3/m4a where the OS decoder supports them, e.g. macOS) and Themis builds a target from their average, with the tolerance set by how much they disagree. Save/load as `.themiscurve`. |
 | **Pass-through** | No EQ, dynamics, limiter or gain stage; reports 0 samples of latency. |
 
 > **About the built-in curves.** They are hand-authored approximations of typical mastered material, *not* percentile
@@ -37,9 +37,6 @@ affects the curve, loudness or true-peak readings.
 3. **Never render with SoundID on.** It is for monitoring only. The Systemwide app is the safest route for FL Studio:
    send FL's output to the SoundID virtual output device and keep SoundID out of the project, so exports are always clean.
 4. **Judge balance by the curve as well as by ear.** Calibrated headphones change what you hear, never what Themis measures.
-5. Use **Hear Original** to A/B loudness-matched while calibrated.
-
-The in-plugin **SoundID setup** button shows this checklist.
 
 ## Build (macOS)
 
@@ -53,7 +50,7 @@ The default configuration builds a **universal** binary (arm64 + x86_64) and cop
 `~/Library/Audio/Plug-Ins/VST3` and `~/Library/Audio/Plug-Ins/Components`. JUCE is fetched automatically (needs git + network).
 
 Then in FL Studio: *Options → Manage plugins → Find plugins* (rescan after switching Rosetta/native mode). Themis appears
-under *Fx → Mastering* (VST3) / *Themis Audio* (AU). On Apple Silicon the binary must be signed, ad-hoc is enough for local use:
+under *Fx / Analyzer* (VST3 category) / *Themis Audio* (AU). On Apple Silicon the binary must be signed, ad-hoc is enough for local use:
 
 ```bash
 codesign --force --deep --sign - ~/Library/Audio/Plug-Ins/VST3/Themis.vst3
@@ -72,16 +69,18 @@ macOS runner, runs the DSP tests, and uploads the zips as artifacts (tag `v0.1.0
 
 ```bash
 make test                              # DSP unit tests, no dependencies (g++/clang++ only)
-cmake -S . -B build -DTHEMIS_BUILD_SMOKE=ON && cmake --build build --target ThemisSmoke
-./build/ThemisSmoke_artefacts/ThemisSmoke snapshot.png   # headless processor+editor run, writes a UI screenshot
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DTHEMIS_BUILD_SMOKE=ON -DTHEMIS_INSTALL_AFTER_BUILD=OFF
+cmake --build build --target ThemisSmoke
+./build/ThemisSmoke_artefacts/Release/ThemisSmoke snapshot.png   # headless processor+editor run, writes a UI screenshot
 ```
 
 Layout:
 
 ```
 core/include/themis/   DSP: Biquad, Eq, Compressor, Limiter, TruePeak, Loudness, StereoTools, FFT,
-                       TonalAnalyzer, TargetCurve, EqFit, Engine (full mastering chain - not used by the plugin any more)
-plugin/Source/         JUCE layer: Parameters, PluginProcessor, PluginEditor, TonalBalanceView (uses TonalAnalyzer + TargetCurve only)
+                       TonalAnalyzer, LowCrestMeter, TargetCurve, EqFit, Engine
+                       (the plugin uses only TonalAnalyzer, LowCrestMeter and TargetCurve; the rest is a mastering chain kept with its tests)
+plugin/Source/         JUCE layer: Parameters, PluginProcessor, PluginEditor, TonalBalanceView
 tests/                 test_main.cpp (DSP), plugin_smoke.cpp (headless JUCE)
 ```
 
@@ -89,16 +88,16 @@ tests/                 test_main.cpp (DSP), plugin_smoke.cpp (headless JUCE)
 
 | Verified (Linux aarch64, JUCE 8.0.6) | Not yet verified |
 |---|---|
-| 947 DSP checks: K-weighting vs the ITU coefficient table, −20 LUFS reference sine at 44.1/48/96 kHz, gating, inter-sample true peak, limiter ceiling, compressor curve, M/S EQ targeting, pink/white-noise spectral slopes, target JSON round-trip, EQ-fit error reduction, engine latency/bypass/A-B | **A macOS build** (the CI workflow does this; the code has no platform-specific paths) |
+| 1035 DSP checks: K-weighting vs the ITU coefficient table, −20 LUFS reference sine at 44.1/48/96 kHz, gating, inter-sample true peak, limiter ceiling, compressor curve, M/S EQ targeting, pink/white-noise spectral slopes, low-end crest meter (sine = 3 dB, band limiting, reset, NaN recovery), target JSON round-trip, EQ-fit error reduction, engine latency/bypass/A-B | **A macOS build** (the CI workflow does this; the code has no platform-specific paths) |
 | Universal (arm64 + x86_64) VST3 + AU build on macOS, zero warnings in Themis' own sources; `auval` AU validation passes; the VST3 loads, instantiates, processes and opens its editor in a JUCE plugin host | Behaviour inside FL Studio's plugin scanner |
-| Headless run of the real processor + editor: audio, parameters, state save/restore incl. custom curve, *Learn from tracks* on a WAV, pass-through is bit-exact, resizing | Loading inside FL Studio, automation, and by-ear tuning of the compressor/limiter |
+| Headless run of the real processor + editor: audio, parameters, state save/restore incl. custom curve, *Learn from tracks* on a WAV, pass-through is bit-exact, resizing | Loading inside FL Studio, automation, and whether the Low Crest "typical" zone suits real masters |
 
 ## Known limitations
 
-- **Limiter vs full-band noise:** the true-peak detector is a 4× interpolator; on music it stays within ~0.1 dB of the
+- **Limiter vs full-band noise** (core library only; the plugin has no limiter): the true-peak detector is a 4× interpolator; on music it stays within ~0.1 dB of the
   ceiling, but white noise reaching Nyquist can overshoot by up to ~1 dB. Leave the −1 dBTP default for streaming masters.
-- Stereo in / stereo out only. No oversampling, no multiband dynamics, no linear-phase EQ (yet).
-- The analyser's FFT runs on a background thread, not the audio thread: `processBlock` only copies samples into a lock-free ring (a few µs). If a bounce renders far faster than real time, the worker may skip frames; the long-term average is barely affected.
+- Stereo in / stereo out only.
+- The analyser's FFT runs on a background thread, not the audio thread: `processBlock` only copies samples into a lock-free ring (a few µs). The Low Crest meter is the one exception: a few biquads per sample run in `processBlock`. If a bounce renders far faster than real time, the worker may skip frames; the long-term average is barely affected.
 - No CLAP build yet (FL Studio can load it; add [clap-juce-extensions](https://github.com/free-audio/clap-juce-extensions)).
 - **Licence:** JUCE is AGPLv3 / commercial. Personal use is fine; if you distribute Themis you must either open-source it
   under AGPL or hold a JUCE commercial licence.

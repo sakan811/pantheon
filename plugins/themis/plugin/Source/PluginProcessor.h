@@ -4,6 +4,7 @@
 
 #include <juce_audio_formats/juce_audio_formats.h>
 #include <juce_audio_processors/juce_audio_processors.h>
+#include <themis/LowCrestMeter.h>
 
 #include <atomic>
 #include <functional>
@@ -43,10 +44,17 @@ public:
     void setStateInformation (const void* data, int sizeInBytes) override;
 
     // ---- shared with the editor (message thread unless noted) ----
-    void resetAnalyzer() { analyzer.requestReset(); }
+    void resetAnalyzer()
+    {
+        analyzer.requestReset();
+        lowCrest.requestReset();
+    }
 
     // Thread-safe read of the long-term spectrum. Returns false until enough audio has been analysed.
     bool readSpectrum (themis::BandArray& out) const;
+
+    // Low-end (20-250 Hz) crest factor in dB. Returns false until enough audio has been measured.
+    bool readLowCrest (float& outDb) const;
 
     // Target curves
     themis::TargetCurve activeTarget() const; // honours the "target" parameter
@@ -56,7 +64,6 @@ public:
     // Reads the given audio files in a background thread, averages their tonal balance and installs the
     // result as the "Custom" target. `onDone` is called on the message thread (error empty on success).
     void learnFromFiles (const juce::Array<juce::File>& files, std::function<void (const juce::String& error)> onDone);
-    bool isLearning() const { return learning.load(); }
 
     juce::AudioProcessorValueTreeState apvts;
     params::Reader paramReader;
@@ -84,6 +91,7 @@ private:
     void stopAnalysis();
 
     themis::TonalAnalyzer analyzer;
+    themis::LowCrestMeter lowCrest;
     std::unique_ptr<AnalysisThread> analysisThread; // exists between prepareToPlay and releaseResources
     bool prepared = false;
 

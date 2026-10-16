@@ -30,6 +30,7 @@ void ThemisProcessor::prepareToPlay (double sr, int)
 {
     stopAnalysis(); // prepare() must not overlap with pump()
     analyzer.prepare (sr);
+    lowCrest.prepare (sr);
     prepared = true;
     analysisThread = std::make_unique<AnalysisThread> (analyzer);
     analysisThread->startThread();
@@ -54,8 +55,11 @@ void ThemisProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
         return;
 
     // Measure only - the audio itself is left exactly as it came in. The FFT work happens on the analysis thread.
-    analyzer.setAveragingSeconds (paramReader.averagingSeconds());
+    const float avgSeconds = paramReader.averagingSeconds();
+    analyzer.setAveragingSeconds (avgSeconds);
     analyzer.push (buffer.getReadPointer (0), buffer.getReadPointer (1), buffer.getNumSamples());
+    lowCrest.setAveragingSeconds (avgSeconds);
+    lowCrest.process (buffer.getReadPointer (0), buffer.getReadPointer (1), buffer.getNumSamples());
 }
 
 juce::AudioProcessorEditor* ThemisProcessor::createEditor()
@@ -103,6 +107,14 @@ bool ThemisProcessor::readSpectrum (themis::BandArray& out) const
     if (!analyzer.hasData())
         return false;
     analyzer.readNormalisedDb (out);
+    return true;
+}
+
+bool ThemisProcessor::readLowCrest (float& outDb) const
+{
+    if (!lowCrest.hasData())
+        return false;
+    outDb = lowCrest.crestDb();
     return true;
 }
 

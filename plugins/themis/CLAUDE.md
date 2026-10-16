@@ -17,8 +17,8 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build --target Themis_VST3 Themis_AU -j8   # Themis_AU is macOS only
 
 # Headless JUCE smoke test (real processor + editor, no host/display); writes a UI screenshot
-cmake -S . -B build -DTHEMIS_BUILD_SMOKE=ON && cmake --build build --target ThemisSmoke
-./build/ThemisSmoke_artefacts/ThemisSmoke snapshot.png
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DTHEMIS_BUILD_SMOKE=ON && cmake --build build --target ThemisSmoke
+./build/ThemisSmoke_artefacts/Release/ThemisSmoke snapshot.png
 ```
 
 - On macOS the plugin build **copies the plugins into `~/Library/Audio/Plug-Ins/{VST3,Components}`** by default (`THEMIS_INSTALL_AFTER_BUILD`, default `${APPLE}`). Pass `-DTHEMIS_INSTALL_AFTER_BUILD=OFF` to avoid touching those folders. Apple Silicon needs an ad-hoc `codesign --force --deep --sign -` on the result (see README).
@@ -31,14 +31,14 @@ cmake -S . -B build -DTHEMIS_BUILD_SMOKE=ON && cmake --build build --target Them
 
 Two layers with a hard dependency direction: `plugin/` → `core/`, never the reverse.
 
-**`core/include/themis/` — header-only, dependency-free C++17 DSP** (no JUCE types). The plugin only uses [TonalAnalyzer.h](core/include/themis/TonalAnalyzer.h) and [TargetCurve.h](core/include/themis/TargetCurve.h). The rest ([Engine.h](core/include/themis/Engine.h), EQ, compressor, limiter, loudness, EqFit…) is a full mastering chain that the plugin **no longer uses** but that is kept, with its tests, in `core/`.
+**`core/include/themis/` — header-only, dependency-free C++17 DSP** (no JUCE types). The plugin only uses [TonalAnalyzer.h](core/include/themis/TonalAnalyzer.h), [TargetCurve.h](core/include/themis/TargetCurve.h) and [LowCrestMeter.h](core/include/themis/LowCrestMeter.h) (20–250 Hz crest factor; runs a few biquads on the audio thread, publishes via atomics). The rest ([Engine.h](core/include/themis/Engine.h), EQ, compressor, limiter, loudness, EqFit…) is a full mastering chain that the plugin **no longer uses** but that is kept, with its tests, in `core/`.
 
 - **Shared analysis grid:** `BandGrid` in TonalAnalyzer.h (61 bands, 1/6-octave from 20 Hz) is the common representation for the analyzer and `TargetCurve` (built-ins, `fromTracks`, JSON `.themiscurve`). Curves are normalised to 0 dB mean over the 200 Hz–5 kHz anchor region (`normaliseAnchor`), so they express shape, not level.
-- Cross-thread: the audio thread only calls `TonalAnalyzer::push` (lock-free ring, no FFT). A plugin-owned worker thread (`ThemisProcessor::AnalysisThread`, started in `prepareToPlay`, stopped in `releaseResources`/destructor) calls `pump()` every ~15 ms to run the FFT and publish through atomics. `requestReset` is applied by the next `pump`. `process()` = `push` + `pump` for offline/tests; `prepare()` must never overlap with `push`/`pump`. `FFT.h` has a complex `FFT` and a `RealFFT` (half-size complex FFT) used by the analyzer.
+- Cross-thread: the audio thread only calls `TonalAnalyzer::push` (lock-free ring, no FFT). A plugin-owned worker thread (`ThemisProcessor::AnalysisThread`, started in `prepareToPlay`, stopped in `releaseResources`/destructor) calls `pump()` every ~15 ms to run the FFT and publish through atomics. `requestReset` is applied by the next `pump`. `process()` = `push` + `pump` for offline/tests; `prepare()` must never overlap with `push`/`pump`. `FFT.h` has a complex `FFT` and a `RealFFT` (half-size complex FFT) used by the analyzer. `LowCrestMeter` is the exception to "nothing but `push` on the audio thread": `processBlock` calls its `process()` directly (3 biquads/sample, no FFT, atomics out); `requestReset` is applied by the next `process()`, and `hasData()` already reports false while a reset is pending.
 
 **`plugin/Source/` — JUCE layer**
 - [Parameters.cpp/.h](plugin/Source/Parameters.cpp): three APVTS parameters (`target`, `tolerance`, `avgTime`); `params::Reader` caches the raw atomics.
-- [PluginProcessor.cpp](plugin/Source/PluginProcessor.cpp): `processBlock` only *reads* the buffer into one `TonalAnalyzer` (via `push`) (never writes it; latency stays 0). State = APVTS XML plus a `customCurve` property holding the target curve as JSON. "Learn from tracks" decodes files on a lazily-created `ThreadPool` job with an `alive` shared flag guarding the async callback against processor destruction. Keep the constructor and `prepareToPlay` light: FL Studio instantiates the plugin while scanning.
+- [PluginProcessor.cpp](plugin/Source/PluginProcessor.cpp): `processBlock` only *reads* the buffer into one `TonalAnalyzer` (via `push`) and one `LowCrestMeter` (never writes it; latency stays 0). State = APVTS XML plus a `customCurve` property holding the target curve as JSON. "Learn from tracks" decodes files on a lazily-created `ThreadPool` job with an `alive` shared flag guarding the async callback against processor destruction. Keep the constructor and `prepareToPlay` light: FL Studio instantiates the plugin while scanning.
 - Editor (`PluginEditor`, `TonalBalanceView`, `ThemisLookAndFeel`) is timer-driven and reads from the processor/atomics; it holds no DSP state.
 - Built-in target names populate the `target` choice parameter, with "Custom" appended as the last index; reordering/adding built-ins in `TargetCurve::builtIns()` shifts that index and affects saved sessions.
 

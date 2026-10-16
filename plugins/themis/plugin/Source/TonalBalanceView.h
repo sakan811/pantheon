@@ -19,13 +19,19 @@ public:
         auto t = proc.activeTarget();
         const float tol = proc.paramReader.value (params::tolerance);
         const double rate = proc.getSampleRate() > 0.0 ? proc.getSampleRate() : 48000.0;
+        float crest = 0.0f;
+        const bool haveCrestNow = proc.readLowCrest (crest);
 
-        const bool changed = have != haveData || (have && differs (m, measured)) || t.name != target.name
+        const bool changed = have != haveData || (have && differs (m, measured)) || haveCrestNow != haveCrest
+                             || (haveCrestNow && differs (crest, lowCrestDb)) || t.name != target.name
                              || differs (t.medianDb, target.medianDb) || differs (t.halfWidthDb, target.halfWidthDb)
                              || differs (tol, tolerance) || differs (rate, fs);
         if (!changed)
             return;
         haveData = have;
+        haveCrest = haveCrestNow;
+        if (haveCrestNow)
+            lowCrestDb = crest;
         if (have)
             measured = m;
         target = std::move (t);
@@ -191,7 +197,8 @@ private:
     {
         struct Range { const char* name; double lo, hi; };
         static constexpr Range ranges[4] = { { "LOW", 20, 120 }, { "LOW-MID", 120, 1000 }, { "HIGH-MID", 1000, 6000 }, { "HIGH", 6000, 20000 } };
-        const float cellW = strip.getWidth() / 4.0f;
+        const float cellW = strip.getWidth() / 5.0f; // four tonal bands + the low-end crest meter
+        drawLowCrest (g, juce::Rectangle<float> (strip.getX() + cellW * 4.0f, strip.getY(), cellW, strip.getHeight()).reduced (4.0f, 0.0f));
         for (int r = 0; r < 4; ++r)
         {
             auto cell = juce::Rectangle<float> (strip.getX() + cellW * static_cast<float> (r), strip.getY(), cellW, strip.getHeight()).reduced (4.0f, 0.0f);
@@ -238,6 +245,42 @@ private:
         }
     }
 
+    // Crest factor (peak/RMS) of the 20-250 Hz band, laid out like TBC's Low End Crest Factor view: a
+    // low-end that is too dynamic sits to the left, one that is too compressed to the right. The
+    // "typical" zone is a hand-authored guess, not measured data.
+    void drawLowCrest (juce::Graphics& g, juce::Rectangle<float> cell) const
+    {
+        constexpr float kDynamicDb = 15.0f, kCompressedDb = 3.0f; // scale ends (left, right)
+        constexpr float kZoneLoDb = 6.0f, kZoneHiDb = 10.0f;      // typical range for mastered music
+
+        const float top = cell.getY();
+        g.setFont (juce::Font (juce::FontOptions (11.5f, juce::Font::bold)));
+        g.setColour (colours::dim);
+        g.drawText ("LOW CREST", cell.removeFromTop (14.0f).toNearestInt(), juce::Justification::left);
+        if (!haveCrest)
+            return;
+
+        const auto xForCrest = [&] (float db, const juce::Rectangle<float>& bar) {
+            return bar.getX() + bar.getWidth() * (kDynamicDb - juce::jlimit (kCompressedDb, kDynamicDb, db)) / (kDynamicDb - kCompressedDb);
+        };
+        const auto bar = cell.removeFromTop (12.0f).reduced (0.0f, 3.0f);
+        g.setColour (colours::panelEdge);
+        g.fillRoundedRectangle (bar, 2.0f);
+        g.setColour (colours::accent.withAlpha (0.35f)); // typical zone
+        g.fillRect (xForCrest (kZoneHiDb, bar), bar.getY(), xForCrest (kZoneLoDb, bar) - xForCrest (kZoneHiDb, bar), bar.getHeight());
+
+        const float outside = lowCrestDb > kZoneHiDb ? lowCrestDb - kZoneHiDb : lowCrestDb < kZoneLoDb ? kZoneLoDb - lowCrestDb : 0.0f;
+        const auto c = outside <= 0.0f ? colours::good : outside <= 2.0f ? colours::warn : colours::bad;
+        g.setColour (c);
+        g.fillRoundedRectangle (juce::Rectangle<float> (xForCrest (lowCrestDb, bar) - 2.0f, bar.getY() - 1.0f, 4.0f, bar.getHeight() + 2.0f), 2.0f);
+
+        g.setFont (juce::Font (juce::FontOptions (11.0f)));
+        const juce::String note = lowCrestDb > kZoneHiDb ? "  dynamic" : lowCrestDb < kZoneLoDb ? "  compressed" : "";
+        g.drawText (juce::String (lowCrestDb, 1) + " dB" + note,
+                    juce::Rectangle<int> (juce::roundToInt (cell.getX()), juce::roundToInt (top) + 14, juce::roundToInt (cell.getWidth()), 14),
+                    juce::Justification::right);
+    }
+
     void drawHover (juce::Graphics& g) const
     {
         if (hoverBand < 0 || !haveData)
@@ -261,6 +304,8 @@ private:
     themis::BandArray measured {};
     themis::TargetCurve target;
     bool haveData = false;
+    bool haveCrest = false;
+    float lowCrestDb = 0.0f;
     float tolerance = 1.0f;
     double fs = 48000.0;
     juce::Rectangle<float> plot;

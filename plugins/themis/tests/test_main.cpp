@@ -3,6 +3,7 @@
 #include <themis/Engine.h>
 #include <themis/EqFit.h>
 #include <themis/Limiter.h>
+#include <themis/LowCrestMeter.h>
 #include <themis/Loudness.h>
 #include <themis/StereoTools.h>
 #include <themis/TargetCurve.h>
@@ -515,6 +516,67 @@ TEST (tonal_analyzer_threaded_api_matches_process_and_survives_backlog)
     c.push (pink.data(), pink.data(), 8192);
     c.pump();
     CHECK (!c.hasData()); // less than one frame since the reset
+}
+
+TEST (low_crest_meter)
+{
+    const double fs = 48000;
+    const int n = static_cast<int> (fs * 6);
+    auto run = [&] (LowCrestMeter& m, const std::vector<float>& x) {
+        for (int pos = 0; pos < n; pos += 512)
+        {
+            const int c = std::min (512, n - pos);
+            m.process (x.data() + pos, x.data() + pos, c);
+        }
+    };
+
+    // A steady low sine has a crest factor of sqrt(2) = 3.01 dB.
+    std::vector<float> sine (static_cast<size_t> (n));
+    for (int i = 0; i < n; ++i)
+        sine[static_cast<size_t> (i)] = 0.5f * static_cast<float> (std::sin (2.0 * kPi * 60.0 * i / fs));
+    LowCrestMeter a;
+    a.prepare (fs);
+    CHECK (!a.hasData());
+    run (a, sine);
+    CHECK (a.hasData());
+    CHECK_NEAR (a.crestDb(), 3.01, 0.15);
+
+    // Content above the band does not count: a 5 kHz sine is filtered out (gated as silence).
+    std::vector<float> hi (static_cast<size_t> (n));
+    for (int i = 0; i < n; ++i)
+        hi[static_cast<size_t> (i)] = 0.5f * static_cast<float> (std::sin (2.0 * kPi * 5000.0 * i / fs));
+    LowCrestMeter b;
+    b.prepare (fs);
+    run (b, hi);
+    CHECK (!b.hasData());
+
+    // Decaying 50 Hz "kicks" once per second are far more peaky than a sustained tone.
+    std::vector<float> kick (static_cast<size_t> (n), 0.0f);
+    for (int i = 0; i < n; ++i)
+    {
+        const double t = std::fmod (static_cast<double> (i) / fs, 1.0);
+        kick[static_cast<size_t> (i)] = 0.8f * static_cast<float> (std::exp (-t * 18.0) * std::sin (2.0 * kPi * 50.0 * t));
+    }
+    LowCrestMeter c;
+    c.prepare (fs);
+    run (c, kick);
+    CHECK (c.hasData());
+    CHECK (c.crestDb() > a.crestDb() + 3.0f);
+
+    // reset discards the measurement, immediately for readers even before more audio arrives
+    c.requestReset();
+    CHECK (!c.hasData());
+    c.process (kick.data(), kick.data(), 64);
+    CHECK (!c.hasData());
+
+    // a burst of NaN must not poison the meter: it recovers once clean audio returns
+    LowCrestMeter d;
+    d.prepare (fs);
+    std::vector<float> bad (4800, std::nanf (""));
+    d.process (bad.data(), bad.data(), static_cast<int> (bad.size()));
+    run (d, sine);
+    CHECK (d.hasData());
+    CHECK_NEAR (d.crestDb(), 3.01, 0.15);
 }
 
 TEST (target_curve_json_roundtrip_and_tracks)
