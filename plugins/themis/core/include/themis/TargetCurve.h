@@ -1,0 +1,216 @@
+#pragma once
+
+#include "TonalAnalyzer.h"
+
+#include <cstdlib>
+#include <cstring>
+#include <sstream>
+#include <string>
+#include <utility>
+#include <vector>
+
+namespace themis
+{
+// A tonal-balance target: a median curve plus a +/- half-width tolerance, both per BandGrid band.
+// Levels are in dB, normalised so the anchor region (200 Hz - 5 kHz) averages 0.
+struct TargetCurve
+{
+    std::string name = "Flat (pink)";
+    BandArray medianDb {};
+    BandArray halfWidthDb {};
+
+    using Anchors = std::vector<std::pair<float, float>>; // (Hz, dB), ascending Hz
+
+    static float interpolate (const Anchors& a, double hz)
+    {
+        if (hz <= a.front().first)
+            return a.front().second;
+        if (hz >= a.back().first)
+            return a.back().second;
+        for (size_t i = 1; i < a.size(); ++i)
+        {
+            if (hz <= a[i].first)
+            {
+                const double t = std::log (hz / a[i - 1].first) / std::log (static_cast<double> (a[i].first) / a[i - 1].first);
+                return static_cast<float> (a[i - 1].second + t * (a[i].second - a[i - 1].second));
+            }
+        }
+        return a.back().second;
+    }
+
+    static TargetCurve fromAnchors (std::string name, const Anchors& median, const Anchors& width)
+    {
+        TargetCurve c;
+        c.name = std::move (name);
+        for (int i = 0; i < BandGrid::kNum; ++i)
+        {
+            const double f = BandGrid::centreHz (i);
+            c.medianDb[static_cast<size_t> (i)] = interpolate (median, f);
+            c.halfWidthDb[static_cast<size_t> (i)] = interpolate (width, f);
+        }
+        normaliseAnchor (c.medianDb);
+        return c;
+    }
+
+    // Average several analysed tracks. Width = spread between tracks, never tighter than minWidthDb.
+    static TargetCurve fromTracks (std::string name, const std::vector<BandArray>& tracks, float minWidthDb = 1.5f,
+                                   float singleTrackWidthDb = 2.0f)
+    {
+        TargetCurve c;
+        c.name = std::move (name);
+        if (tracks.empty())
+            return c;
+        const double n = static_cast<double> (tracks.size());
+        for (int i = 0; i < BandGrid::kNum; ++i)
+        {
+            const size_t s = static_cast<size_t> (i);
+            double mean = 0.0;
+            for (const auto& t : tracks)
+                mean += t[s];
+            mean /= n;
+            double var = 0.0;
+            for (const auto& t : tracks)
+                var += (t[s] - mean) * (t[s] - mean);
+            const double sd = tracks.size() > 1 ? std::sqrt (var / (n - 1.0)) : 0.0;
+            c.medianDb[s] = static_cast<float> (mean);
+            c.halfWidthDb[s] = tracks.size() > 1 ? std::max (minWidthDb, static_cast<float> (sd * 1.25))
+                                                 : singleTrackWidthDb;
+        }
+        // A single track is noisy at fine resolution; smooth over +/- 1/3 octave.
+        smooth (c.medianDb, 2);
+        smooth (c.halfWidthDb, 2);
+        normaliseAnchor (c.medianDb);
+        return c;
+    }
+
+    static void smooth (BandArray& v, int radius)
+    {
+        BandArray out = v;
+        for (int i = 0; i < BandGrid::kNum; ++i)
+        {
+            double s = 0.0;
+            int n = 0;
+            for (int k = -radius; k <= radius; ++k)
+            {
+                const int j = i + k;
+                if (j >= 0 && j < BandGrid::kNum)
+                {
+                    s += v[static_cast<size_t> (j)];
+                    ++n;
+                }
+            }
+            out[static_cast<size_t> (i)] = static_cast<float> (s / n);
+        }
+        v = out;
+    }
+
+    // ---- built-in starter curves -------------------------------------------------------------
+    // These are hand-authored approximations of typical mastered material (constant-Q band energy,
+    // so pink noise reads flat). They are starting points, not measured percentiles of a dataset:
+    // for accuracy, learn a curve from reference tracks you trust.
+    static const std::vector<TargetCurve>& builtIns()
+    {
+        static const std::vector<TargetCurve> list = makeBuiltIns();
+        return list;
+    }
+
+    // ---- (de)serialisation -------------------------------------------------------------------
+    std::string toJson() const
+    {
+        std::ostringstream o;
+        o.setf (std::ios::fixed);
+        o.precision (3);
+        o << "{\"themisCurve\":1,\"name\":\"";
+        for (char ch : name)
+            o << (ch == '"' || ch == '\\' ? '\'' : ch);
+        o << "\",\"bands\":" << BandGrid::kNum << ",\"median\":[";
+        for (size_t i = 0; i < medianDb.size(); ++i)
+            o << (i ? "," : "") << medianDb[i];
+        o << "],\"width\":[";
+        for (size_t i = 0; i < halfWidthDb.size(); ++i)
+            o << (i ? "," : "") << halfWidthDb[i];
+        o << "]}";
+        return o.str();
+    }
+
+    static bool fromJson (const std::string& json, TargetCurve& out)
+    {
+        if (json.find ("\"themisCurve\"") == std::string::npos)
+            return false;
+        TargetCurve c;
+        const auto nameKey = json.find ("\"name\":\"");
+        if (nameKey != std::string::npos)
+        {
+            const auto start = nameKey + 8;
+            const auto end = json.find ('"', start);
+            if (end != std::string::npos)
+                c.name = json.substr (start, end - start);
+        }
+        if (!parseArray (json, "\"median\":[", c.medianDb) || !parseArray (json, "\"width\":[", c.halfWidthDb))
+            return false;
+        out = c;
+        return true;
+    }
+
+private:
+    static bool parseArray (const std::string& json, const char* key, BandArray& dst)
+    {
+        const auto k = json.find (key);
+        if (k == std::string::npos)
+            return false;
+        const char* p = json.c_str() + k + std::strlen (key);
+        for (size_t i = 0; i < dst.size(); ++i)
+        {
+            char* end = nullptr;
+            const double v = std::strtod (p, &end);
+            if (end == p || !std::isfinite (v))
+                return false;
+            dst[i] = static_cast<float> (v);
+            p = end;
+            while (*p == ',' || *p == ' ')
+                ++p;
+        }
+        return *p == ']';
+    }
+
+    static std::vector<TargetCurve> makeBuiltIns()
+    {
+        const Anchors defaultWidth = { { 20, 4.0f },  { 30, 4.0f },  { 45, 3.5f },  { 60, 3.0f },  { 90, 2.5f },
+                                       { 200, 2.0f }, { 500, 1.6f }, { 1000, 1.5f }, { 3000, 1.8f }, { 5000, 2.2f },
+                                       { 8000, 2.8f }, { 12000, 3.5f }, { 16000, 4.5f }, { 20000, 6.0f } };
+        std::vector<TargetCurve> v;
+        v.push_back (fromAnchors ("Flat (pink)", { { 20, 0 }, { 20000, 0 } }, { { 20, 3 }, { 20000, 3 } }));
+        v.push_back (fromAnchors ("Modern Pop / Streaming",
+                                  { { 20, -14 }, { 30, -7 }, { 45, -1.5f }, { 60, 1.5f }, { 90, 2.5f }, { 130, 2 }, { 200, 1 },
+                                    { 300, 0.3f }, { 500, 0 }, { 800, -0.5f }, { 1200, -1.2f }, { 2000, -2.2f }, { 3000, -3 },
+                                    { 5000, -4 }, { 8000, -5.5f }, { 12000, -8.5f }, { 16000, -12 }, { 20000, -20 } },
+                                  defaultWidth));
+        v.push_back (fromAnchors ("Hip-Hop / Trap",
+                                  { { 20, -10 }, { 30, -2 }, { 45, 3.5f }, { 60, 5.5f }, { 90, 4 }, { 130, 2.5f }, { 200, 1 },
+                                    { 300, 0 }, { 500, -0.5f }, { 800, -1.2f }, { 1200, -1.8f }, { 2000, -2.5f }, { 3000, -3.2f },
+                                    { 5000, -4.2f }, { 8000, -5.5f }, { 12000, -8 }, { 16000, -11.5f }, { 20000, -19 } },
+                                  defaultWidth));
+        v.push_back (fromAnchors ("EDM / Club",
+                                  { { 20, -12 }, { 30, -4 }, { 45, 2.5f }, { 60, 4.5f }, { 90, 3.5f }, { 130, 2 }, { 200, 0.8f },
+                                    { 300, -0.2f }, { 500, -0.8f }, { 800, -1 }, { 1200, -1 }, { 2000, -1.5f }, { 3000, -2 },
+                                    { 5000, -2.5f }, { 8000, -3.5f }, { 12000, -5.5f }, { 16000, -9 }, { 20000, -18 } },
+                                  defaultWidth));
+        v.push_back (fromAnchors ("Rock",
+                                  { { 20, -16 }, { 30, -9 }, { 45, -3 }, { 60, 0 }, { 90, 1.5f }, { 130, 2 }, { 200, 1.5f },
+                                    { 300, 1 }, { 500, 0.3f }, { 800, 0 }, { 1200, -0.3f }, { 2000, -0.8f }, { 3000, -1.5f },
+                                    { 5000, -3 }, { 8000, -4.5f }, { 12000, -7.5f }, { 16000, -11.5f }, { 20000, -20 } },
+                                  defaultWidth));
+        v.push_back (fromAnchors ("Acoustic / Jazz",
+                                  { { 20, -20 }, { 30, -14 }, { 45, -7 }, { 60, -3.5f }, { 90, -0.5f }, { 130, 1 }, { 200, 1.5f },
+                                    { 300, 1.2f }, { 500, 0.5f }, { 800, 0 }, { 1200, -0.8f }, { 2000, -1.8f }, { 3000, -2.8f },
+                                    { 5000, -4.5f }, { 8000, -6.5f }, { 12000, -9.5f }, { 16000, -14 }, { 20000, -22 } },
+                                  defaultWidth));
+        v.push_back (fromAnchors ("Orchestral",
+                                  { { 20, -18 }, { 30, -11 }, { 45, -5 }, { 60, -2 }, { 90, 0.5f }, { 130, 1.5f }, { 200, 1.5f },
+                                    { 300, 1 }, { 500, 0.2f }, { 800, -0.5f }, { 1200, -1.5f }, { 2000, -2.8f }, { 3000, -3.8f },
+                                    { 5000, -5.5f }, { 8000, -8 }, { 12000, -12 }, { 16000, -17 }, { 20000, -26 } },
+                                  defaultWidth));
+        return v;
+    }
+};
+} // namespace themis
