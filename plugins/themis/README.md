@@ -98,7 +98,7 @@ tests/                 test_main.cpp (DSP), plugin_smoke.cpp (headless JUCE)
 - **Limiter vs full-band noise:** the true-peak detector is a 4× interpolator; on music it stays within ~0.1 dB of the
   ceiling, but white noise reaching Nyquist can overshoot by up to ~1 dB. Leave the −1 dBTP default for streaming masters.
 - Stereo in / stereo out only. No oversampling, no multiband dynamics, no linear-phase EQ (yet).
-- The analyser computes two 16k-point FFT frames every ~85 ms on the audio thread (~0.3 ms each on a laptop CPU).
+- The analyser's FFT runs on a background thread, not the audio thread: `processBlock` only copies samples into a lock-free ring (a few µs). If a bounce renders far faster than real time, the worker may skip frames; the long-term average is barely affected.
 - No CLAP build yet (FL Studio can load it; add [clap-juce-extensions](https://github.com/free-audio/clap-juce-extensions)).
 - **Licence:** JUCE is AGPLv3 / commercial. Personal use is fine; if you distribute Themis you must either open-source it
   under AGPL or hold a JUCE commercial licence.

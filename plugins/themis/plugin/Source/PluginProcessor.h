@@ -19,7 +19,7 @@ public:
 
     // ---- juce::AudioProcessor ----
     void prepareToPlay (double sampleRate, int samplesPerBlock) override;
-    void releaseResources() override {}
+    void releaseResources() override;
     bool isBusesLayoutSupported (const BusesLayout& layouts) const override;
     void processBlock (juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
     using juce::AudioProcessor::processBlock;
@@ -62,9 +62,29 @@ public:
     params::Reader paramReader;
 
 private:
+    // Runs the FFT analysis off the audio thread: processBlock() only queues samples, this drains them.
+    class AnalysisThread : public juce::Thread
+    {
+    public:
+        explicit AnalysisThread (themis::TonalAnalyzer& a) : juce::Thread ("Themis analysis"), analyzer (a) {}
+        void run() override
+        {
+            while (!threadShouldExit())
+            {
+                analyzer.pump();
+                wait (15);
+            }
+        }
+
+    private:
+        themis::TonalAnalyzer& analyzer;
+    };
+
     void setParameterValue (const juce::String& id, float plainValue);
+    void stopAnalysis();
 
     themis::TonalAnalyzer analyzer;
+    std::unique_ptr<AnalysisThread> analysisThread; // exists between prepareToPlay and releaseResources
     bool prepared = false;
 
     mutable juce::CriticalSection curveLock;

@@ -3,6 +3,12 @@
 #include <algorithm>
 #include <cmath>
 
+#if defined(__GNUC__) || defined(__clang__) || defined(_MSC_VER)
+ #define THEMIS_RESTRICT __restrict
+#else
+ #define THEMIS_RESTRICT
+#endif
+
 namespace themis
 {
 constexpr double kPi = 3.14159265358979323846;

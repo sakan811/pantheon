@@ -13,15 +13,32 @@ ThemisProcessor::ThemisProcessor()
 
 ThemisProcessor::~ThemisProcessor()
 {
+    stopAnalysis();
     alive->store (false);
     if (pool != nullptr)
         pool->removeAllJobs (true, 10000);
 }
 
+void ThemisProcessor::stopAnalysis()
+{
+    if (analysisThread != nullptr)
+        analysisThread->stopThread (2000);
+    analysisThread.reset();
+}
+
 void ThemisProcessor::prepareToPlay (double sr, int)
 {
+    stopAnalysis(); // prepare() must not overlap with pump()
     analyzer.prepare (sr);
     prepared = true;
+    analysisThread = std::make_unique<AnalysisThread> (analyzer);
+    analysisThread->startThread();
+}
+
+void ThemisProcessor::releaseResources()
+{
+    prepared = false;
+    stopAnalysis();
 }
 
 bool ThemisProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
@@ -36,9 +53,9 @@ void ThemisProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
     if (!prepared || buffer.getNumChannels() < 2 || buffer.getNumSamples() == 0)
         return;
 
-    // Measure only - the audio itself is left exactly as it came in.
+    // Measure only - the audio itself is left exactly as it came in. The FFT work happens on the analysis thread.
     analyzer.setAveragingSeconds (paramReader.averagingSeconds());
-    analyzer.process (buffer.getReadPointer (0), buffer.getReadPointer (1), buffer.getNumSamples());
+    analyzer.push (buffer.getReadPointer (0), buffer.getReadPointer (1), buffer.getNumSamples());
 }
 
 juce::AudioProcessorEditor* ThemisProcessor::createEditor()

@@ -3,19 +3,34 @@
 #include "PluginProcessor.h"
 #include "ThemisLookAndFeel.h"
 
+#include <cstring>
+
 // The reference-curve display: long-term spectrum of the signal against the target band.
 class TonalBalanceView : public juce::Component
 {
 public:
     explicit TonalBalanceView (ThemisProcessor& p) : proc (p) { setMouseCursor (juce::MouseCursor::CrosshairCursor); }
 
-    // Pull fresh data from the processor (message thread, ~30 Hz).
+    // Pull fresh data from the processor (message thread, ~30 Hz). Repaints only if something changed.
     void update()
     {
-        haveData = proc.readSpectrum (measured);
-        target = proc.activeTarget();
-        tolerance = proc.paramReader.value (params::tolerance);
-        fs = proc.getSampleRate() > 0.0 ? proc.getSampleRate() : 48000.0;
+        themis::BandArray m {};
+        const bool have = proc.readSpectrum (m);
+        auto t = proc.activeTarget();
+        const float tol = proc.paramReader.value (params::tolerance);
+        const double rate = proc.getSampleRate() > 0.0 ? proc.getSampleRate() : 48000.0;
+
+        const bool changed = have != haveData || (have && differs (m, measured)) || t.name != target.name
+                             || differs (t.medianDb, target.medianDb) || differs (t.halfWidthDb, target.halfWidthDb)
+                             || differs (tol, tolerance) || differs (rate, fs);
+        if (!changed)
+            return;
+        haveData = have;
+        if (have)
+            measured = m;
+        target = std::move (t);
+        tolerance = tol;
+        fs = rate;
         repaint();
     }
 
@@ -55,6 +70,10 @@ public:
     }
 
 private:
+    // Bitwise comparison: only used to decide whether a repaint is needed.
+    template <typename T>
+    static bool differs (const T& a, const T& b) { return std::memcmp (&a, &b, sizeof (T)) != 0; }
+
     static constexpr float kTopDb = 12.0f, kBottomDb = -30.0f;
     static constexpr int kBandCount = themis::BandGrid::kNum;
 

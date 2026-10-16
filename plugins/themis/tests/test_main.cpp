@@ -419,6 +419,104 @@ TEST (tonal_analyzer_cost_per_frame)
     CHECK (ms < 3000.0 * 0.05); // < 5% realtime
 }
 
+TEST (fft_real_and_complex_match_naive_dft)
+{
+    std::mt19937 rng (21);
+    std::uniform_real_distribution<float> d (-1.0f, 1.0f);
+    for (int n : { 8, 64, 1024 })
+    {
+        std::vector<float> x (static_cast<size_t> (n)), im (static_cast<size_t> (n));
+        for (auto& v : x)
+            v = d (rng);
+        for (auto& v : im)
+            v = d (rng);
+
+        // complex transform
+        std::vector<float> cr = x, ci = im;
+        FFT (n).transform (cr.data(), ci.data());
+        // real transform
+        std::vector<float> rr (static_cast<size_t> (n / 2 + 1)), ri (rr.size()), pw (rr.size());
+        RealFFT rf (n);
+        rf.forward (x.data(), rr.data(), ri.data());
+        rf.powerSpectrum (x.data(), pw.data(), 2.0f);
+
+        double worstC = 0.0, worstR = 0.0, worstP = 0.0;
+        for (int k = 0; k <= n / 2; ++k)
+        {
+            double xr = 0, xi = 0, yr = 0, yi = 0;
+            for (int t = 0; t < n; ++t)
+            {
+                const double a = -2.0 * kPi * k * t / n, c = std::cos (a), sn = std::sin (a);
+                xr += x[static_cast<size_t> (t)] * c;
+                xi += x[static_cast<size_t> (t)] * sn;
+                yr += x[static_cast<size_t> (t)] * c - im[static_cast<size_t> (t)] * sn;
+                yi += x[static_cast<size_t> (t)] * sn + im[static_cast<size_t> (t)] * c;
+            }
+            worstC = std::max (worstC, std::abs (yr - cr[static_cast<size_t> (k)]) + std::abs (yi - ci[static_cast<size_t> (k)]));
+            worstR = std::max (worstR, std::abs (xr - rr[static_cast<size_t> (k)]) + std::abs (xi - ri[static_cast<size_t> (k)]));
+            worstP = std::max (worstP, std::abs (2.0 * (xr * xr + xi * xi) - pw[static_cast<size_t> (k)]));
+        }
+        const double tol = 1.0e-5 * n;
+        CHECK (worstC < tol);
+        CHECK (worstR < tol);
+        CHECK (worstP < tol * n);
+    }
+}
+
+TEST (tonal_analyzer_threaded_api_matches_process_and_survives_backlog)
+{
+    const double fs = 48000;
+    const size_t n = static_cast<size_t> (fs * 12);
+    const auto pink = pinkNoise (n, 9);
+    BandArray ref {}, got {};
+
+    TonalAnalyzer a;
+    a.prepare (fs);
+    a.setAveragingSeconds (0.0f);
+    for (size_t pos = 0; pos < n; pos += 128)
+        a.process (pink.data() + pos, pink.data() + pos, static_cast<int> (std::min<size_t> (128, n - pos)));
+    CHECK (a.hasData());
+    a.readNormalisedDb (ref);
+
+    // push() in odd-sized blocks, pump() only now and then (wraps the ring several times, never overflows it)
+    TonalAnalyzer b;
+    b.prepare (fs);
+    b.setAveragingSeconds (0.0f);
+    int blocks = 0;
+    for (size_t pos = 0; pos < n; pos += 1531, ++blocks)
+    {
+        const int c = static_cast<int> (std::min<size_t> (1531, n - pos));
+        b.push (pink.data() + pos, pink.data() + pos, c);
+        if (blocks % 20 == 0)
+            b.pump();
+    }
+    b.pump();
+    CHECK (b.hasData());
+    b.readNormalisedDb (got);
+    for (size_t i = 0; i < ref.size(); ++i)
+        CHECK_NEAR (got[i], ref[i], 1.0e-3);
+
+    // a worker that never keeps up skips frames but must still produce a sensible curve
+    TonalAnalyzer c;
+    c.prepare (fs);
+    c.setAveragingSeconds (0.0f);
+    for (size_t pos = 0; pos < n; pos += 512)
+        c.push (pink.data() + pos, pink.data() + pos, static_cast<int> (std::min<size_t> (512, n - pos)));
+    c.pump();
+    CHECK (c.hasData());
+    c.readNormalisedDb (got);
+    for (double hz : { 125.0, 1000.0, 8000.0 })
+        CHECK_NEAR (got[static_cast<size_t> (std::lround (BandGrid::indexForHz (hz)))], 0.0, 1.5);
+
+    // reset discards earlier audio and is applied by pump()
+    c.requestReset();
+    c.pump();
+    CHECK (!c.hasData());
+    c.push (pink.data(), pink.data(), 8192);
+    c.pump();
+    CHECK (!c.hasData()); // less than one frame since the reset
+}
+
 TEST (target_curve_json_roundtrip_and_tracks)
 {
     const auto& built = TargetCurve::builtIns();

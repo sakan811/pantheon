@@ -2,8 +2,11 @@
 
 #include "FFT.h"
 
+#include <algorithm>
 #include <array>
 #include <atomic>
+#include <cmath>
+#include <cstdint>
 #include <memory>
 #include <vector>
 
@@ -47,8 +50,12 @@ inline void normaliseAnchor (BandArray& db)
         v -= mean;
 }
 
-// Long-term constant-Q spectrum of a stereo signal (analysed as mid). Audio-thread writes,
-// UI-thread reads published values.
+// Long-term constant-Q spectrum of a stereo signal (analysed as mid).
+//
+// Threading: the audio thread only calls push(), which copies the mid signal into a lock-free ring and
+// does no FFT work. A worker thread calls pump() every few milliseconds to run the analysis; UI threads
+// read the published values. process() = push() + pump() on one thread, for offline use and tests.
+// prepare() must not run concurrently with push()/pump().
 class TonalAnalyzer
 {
 public:
@@ -68,7 +75,7 @@ public:
             order = 16;
         fftSize = 1 << order;
         hop = fftSize / 4;
-        fft = std::make_unique<FFT> (fftSize);
+        fft = std::make_unique<RealFFT> (fftSize);
         window.resize (static_cast<size_t> (fftSize));
         double wsum2 = 0.0;
         for (int i = 0; i < fftSize; ++i)
@@ -78,9 +85,11 @@ public:
             wsum2 += w * w;
         }
         powerNorm = static_cast<float> (1.0 / wsum2);
-        ring.assign (static_cast<size_t> (fftSize), 0.0f);
-        re.assign (static_cast<size_t> (fftSize), 0.0f);
-        im.assign (static_cast<size_t> (fftSize), 0.0f);
+        frame.assign (static_cast<size_t> (fftSize), 0.0f);
+        power.assign (static_cast<size_t> (fftSize / 2 + 1), 0.0f);
+        ringSize = static_cast<uint64_t> (fftSize) * kRingFrames; // power of two: indices wrap with a mask
+        ring.assign (static_cast<size_t> (ringSize), 0.0f);
+        writeCount.store (0, std::memory_order_relaxed);
         buildBandMap();
         setAveragingSeconds (30.0f);
         reset();
@@ -89,25 +98,56 @@ public:
     // 0 = infinite (cumulative mean).
     void setAveragingSeconds (float s) { avgSeconds.store (s, std::memory_order_relaxed); }
 
-    // Safe from any thread; applied on the next process() call.
+    // Safe from any thread; applied on the next pump().
     void requestReset() { resetFlag.store (true, std::memory_order_release); }
 
-    void process (const float* l, const float* r, int n)
+    // Audio thread: queue n samples for analysis. Wait-free, no allocation, no FFT.
+    void push (const float* l, const float* r, int n)
+    {
+        const uint64_t w = writeCount.load (std::memory_order_relaxed);
+        const size_t pos = static_cast<size_t> (w & (ringSize - 1));
+        const int first = static_cast<int> (std::min<uint64_t> (static_cast<uint64_t> (n), ringSize - pos));
+        float* dst = ring.data() + pos;
+        for (int i = 0; i < first; ++i)
+            dst[i] = (l[i] + r[i]) * 0.5f;
+        for (int i = first; i < n; ++i)
+            ring[static_cast<size_t> (i - first)] = (l[i] + r[i]) * 0.5f;
+        writeCount.store (w + static_cast<uint64_t> (n), std::memory_order_release);
+    }
+
+    // Worker thread: analyse every frame that has become available since the last call. If the worker
+    // falls so far behind that the ring would be overwritten, the oldest frames are skipped.
+    void pump()
     {
         if (resetFlag.exchange (false, std::memory_order_acq_rel))
             reset();
 
-        for (int i = 0; i < n; ++i)
+        const uint64_t written = writeCount.load (std::memory_order_acquire);
+        // A block still being written may overwrite up to one FFT length beyond `written`, so keep that clear.
+        const uint64_t maxLag = ringSize - static_cast<uint64_t> (fftSize);
+        while (nextFrameEnd <= written)
         {
-            ring[static_cast<size_t> (writePos)] = (l[i] + r[i]) * 0.5f;
-            writePos = (writePos + 1) % fftSize;
-            ++samplesSeen;
-            if (++sinceHop >= hop)
+            const uint64_t start = nextFrameEnd - static_cast<uint64_t> (fftSize);
+            if (written - start > maxLag)
             {
-                sinceHop = 0;
-                if (samplesSeen >= static_cast<size_t> (fftSize)) // ring holds a full frame of real data
-                    analyseFrame();
+                const uint64_t minEnd = written - maxLag + static_cast<uint64_t> (fftSize);
+                const uint64_t hops = (minEnd - nextFrameEnd + static_cast<uint64_t> (hop) - 1) / static_cast<uint64_t> (hop);
+                nextFrameEnd += hops * static_cast<uint64_t> (hop);
+                continue;
             }
+            analyseFrame (start);
+            nextFrameEnd += static_cast<uint64_t> (hop);
+        }
+    }
+
+    // push() + pump() on the calling thread.
+    void process (const float* l, const float* r, int n)
+    {
+        for (int pos = 0; pos < n; pos += hop)
+        {
+            const int c = std::min (hop, n - pos);
+            push (l + pos, r + pos, c);
+            pump();
         }
     }
 
@@ -167,30 +207,24 @@ private:
         }
     }
 
-    void analyseFrame()
+    void analyseFrame (uint64_t start)
     {
         // Gate on RMS of the analysed segment.
+        const size_t mask = static_cast<size_t> (ringSize - 1);
+        const size_t s0 = static_cast<size_t> (start & mask);
         double energy = 0.0;
         for (int i = 0; i < fftSize; ++i)
         {
-            const float v = ring[static_cast<size_t> ((writePos + i) % fftSize)];
-            re[static_cast<size_t> (i)] = v * window[static_cast<size_t> (i)];
-            im[static_cast<size_t> (i)] = 0.0f;
+            const float v = ring[(s0 + static_cast<size_t> (i)) & mask];
+            frame[static_cast<size_t> (i)] = v * window[static_cast<size_t> (i)];
             energy += static_cast<double> (v) * v;
         }
         const float rmsDb = 10.0f * std::log10 (static_cast<float> (energy / fftSize) + 1.0e-20f);
         if (rmsDb < kGateDb)
             return;
 
-        fft->transform (re.data(), im.data());
-
-        // power spectrum, stored in place of the real part
+        fft->powerSpectrum (frame.data(), power.data(), powerNorm);
         const int half = fftSize / 2;
-        for (int k = 0; k <= half; ++k)
-        {
-            const size_t s = static_cast<size_t> (k);
-            re[s] = (re[s] * re[s] + im[s] * im[s]) * powerNorm;
-        }
 
         ++frameCount;
         const double hopSec = static_cast<double> (hop) / fs;
@@ -207,12 +241,12 @@ private:
             else if (m.lastBin >= m.firstBin)
             {
                 for (int k = m.firstBin; k <= m.lastBin; ++k)
-                    e += re[static_cast<size_t> (k)];
+                    e += power[static_cast<size_t> (k)];
             }
             else
             {
-                const float p0 = re[static_cast<size_t> (m.interpLo)];
-                const float p1 = re[static_cast<size_t> (std::min (m.interpLo + 1, half))];
+                const float p0 = power[static_cast<size_t> (m.interpLo)];
+                const float p1 = power[static_cast<size_t> (std::min (m.interpLo + 1, half))];
                 e = (p0 + (p1 - p0) * m.interpFrac) * m.binsWide;
             }
             avg[static_cast<size_t> (b)] += alpha * (e - avg[static_cast<size_t> (b)]);
@@ -233,12 +267,14 @@ private:
 
     void reset()
     {
-        std::fill (ring.begin(), ring.end(), 0.0f);
         avg.fill (0.0);
-        writePos = 0;
-        sinceHop = static_cast<int> (hopPhase * hop);
-        samplesSeen = 0;
         frameCount = 0;
+        // Only audio pushed from now on counts. Frames end every `hop` samples once a full frame of new data exists.
+        const uint64_t base = writeCount.load (std::memory_order_acquire);
+        const uint64_t offset = static_cast<uint64_t> (hop - static_cast<int> (hopPhase * hop));
+        nextFrameEnd = base + offset;
+        while (nextFrameEnd - base < static_cast<uint64_t> (fftSize))
+            nextFrameEnd += static_cast<uint64_t> (hop);
         for (auto& v : published.db)
             v.store (-100.0f, std::memory_order_relaxed);
         published.frames.store (0, std::memory_order_relaxed);
@@ -246,13 +282,15 @@ private:
 
     double fs = 48000.0;
     int fftSize = 16384, hop = 4096;
-    std::unique_ptr<FFT> fft;
-    std::vector<float> window, ring, re, im;
+    static constexpr uint64_t kRingFrames = 16; // ring length in FFT frames (~5 s at 48 kHz)
+    std::unique_ptr<RealFFT> fft;
+    std::vector<float> window, ring, frame, power;
     float powerNorm = 1.0f;
     std::array<BandMap, BandGrid::kNum> bandMap {};
     std::array<double, BandGrid::kNum> avg {};
-    int writePos = 0, sinceHop = 0;
-    size_t samplesSeen = 0;
+    uint64_t ringSize = 0;
+    std::atomic<uint64_t> writeCount { 0 }; // total samples pushed since prepare(); the ring index is count & (ringSize-1)
+    uint64_t nextFrameEnd = 0;              // worker-side: absolute sample index where the next frame ends
     int frameCount = 0;
     double hopPhase = 0.0;
 

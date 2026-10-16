@@ -57,6 +57,9 @@ static void runAudio (ThemisProcessor& proc, double seconds, double fs, int bloc
     }
 }
 
+// The analysis runs on a worker thread that polls every ~15 ms; give it time to drain what runAudio() queued.
+static void settle() { juce::Thread::sleep (150); }
+
 static void pump (int ms) { juce::MessageManager::getInstance()->runDispatchLoopUntil (ms); }
 
 int main (int argc, char** argv)
@@ -86,6 +89,7 @@ int main (int argc, char** argv)
     {
         themis::BandArray m {};
         runAudio (proc, 14.0, fs, 512, 0.5f, 1);
+        settle();
         CHECK (proc.readSpectrum (m), "analyser should have data after 14 s");
         const auto one = static_cast<size_t> (std::lround (themis::BandGrid::indexForHz (1000)));
         const auto eight = static_cast<size_t> (std::lround (themis::BandGrid::indexForHz (8000)));
@@ -93,6 +97,7 @@ int main (int argc, char** argv)
         CHECK (std::abs (m[one]) < 1.5f && std::abs (m[eight]) < 1.5f);
         proc.resetAnalyzer();
         runAudio (proc, 0.1, fs, 512, 0.5f, 1);
+        settle();
         CHECK (!proc.readSpectrum (m), "reset should clear the curve");
     }
 
@@ -174,6 +179,7 @@ int main (int argc, char** argv)
     std::printf ("[6] editor builds, paints and survives resizing\n");
     {
         runAudio (proc, 14.0, fs, 512, 0.5f, 3); // so the screenshot shows a measured curve
+        settle();
         std::unique_ptr<juce::AudioProcessorEditor> editor (proc.createEditor());
         CHECK (editor != nullptr);
         if (editor != nullptr)
