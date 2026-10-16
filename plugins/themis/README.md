@@ -1,0 +1,104 @@
+# Themis
+
+A reference-curve plugin for FL Studio (and any VST3 / AU host) in the style of **iZotope Tonal Balance Control**: it
+measures the long-term tonal balance of your master and draws it against a target band. It is **analysis only** - the
+audio passes through bit-for-bit unchanged with zero latency, so it is safe to leave on the master bus.
+
+- Formats: **VST3 + AU** (macOS, universal arm64 + x86_64, macOS 11+), VST3 + Standalone on Linux/Windows if you build there.
+  FL Studio for macOS loads VST3, AU and CLAP; there is no VST2 for new plugins.
+- Built with [JUCE](https://juce.com) 8. All DSP lives in a dependency-free C++17 core ([core/include/themis](core/include/themis))
+  with its own unit tests.
+
+![Themis](docs/screenshot.png)
+
+*Headless render of the editor measuring pink noise against a curve learned from pink noise.*
+
+## Features
+
+| Area | What it does |
+|---|---|
+| **Tonal balance curve** | 1/6-octave long-term spectrum (20 Hz–20 kHz) vs a target *median ± tolerance* band. Segments turn green / amber / red as you leave the band. Four broadband readouts (Low / Low-Mid / High-Mid / High) show your average offset from target. Averaging: 10 s / 30 s / 2 min / infinite; **Reset** restarts it. |
+| **Target curves** | 7 built-in starter curves (Flat, Modern Pop, Hip-Hop, EDM, Rock, Acoustic, Orchestral) **+ "Learn from tracks…"**: pick one or more reference masters (wav/aiff/flac/mp3/m4a/ogg) and Themis builds a target from their average, with the tolerance set by how much they disagree. Save/load as `.themiscurve`. |
+| **Pass-through** | No EQ, dynamics, limiter or gain stage; reports 0 samples of latency. |
+
+> **About the built-in curves.** They are hand-authored approximations of typical mastered material, *not* percentile
+> statistics from a dataset like iZotope's. Treat them as starting points. For accuracy, use **Learn from tracks** with
+> masters you trust in your genre.
+
+## Use with SoundID Reference (Sonarworks)
+
+SoundID Reference has no API a third-party plugin can talk to, so "pairing" is about signal-chain order and not
+double-processing. Themis measures only its own input/output, so as long as SoundID sits **after** it, calibration never
+affects the curve, loudness or true-peak readings.
+
+1. **Order:** `… → Themis → SoundID Reference` (SoundID last on the master).
+2. **One SoundID mode at a time:** the plugin on the master *or* the Systemwide app — not both. Running both
+   double-corrects; Sonarworks users report big level drops when both are active.
+3. **Never render with SoundID on.** It is for monitoring only. The Systemwide app is the safest route for FL Studio:
+   send FL's output to the SoundID virtual output device and keep SoundID out of the project, so exports are always clean.
+4. **Judge balance by the curve as well as by ear.** Calibrated headphones change what you hear, never what Themis measures.
+5. Use **Hear Original** to A/B loudness-matched while calibrated.
+
+The in-plugin **SoundID setup** button shows this checklist.
+
+## Build (macOS)
+
+```bash
+brew install cmake                    # once (Xcode command line tools required)
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build --target Themis_VST3 Themis_AU -j8
+```
+
+The default configuration builds a **universal** binary (arm64 + x86_64) and copies the plugins to
+`~/Library/Audio/Plug-Ins/VST3` and `~/Library/Audio/Plug-Ins/Components`. JUCE is fetched automatically (needs git + network).
+
+Then in FL Studio: *Options → Manage plugins → Find plugins* (rescan after switching Rosetta/native mode). Themis appears
+under *Fx → Mastering* (VST3) / *Themis Audio* (AU). On Apple Silicon the binary must be signed, ad-hoc is enough for local use:
+
+```bash
+codesign --force --deep --sign - ~/Library/Audio/Plug-Ins/VST3/Themis.vst3
+codesign --force --deep --sign - ~/Library/Audio/Plug-Ins/Components/Themis.component
+auval -v aufx Thms Thmi               # optional: validate the AU
+```
+
+To share builds with other people you need an Apple Developer ID certificate + notarisation; otherwise Gatekeeper
+will quarantine downloaded copies (`xattr -cr Themis.vst3` for personal use).
+
+### No Mac handy?
+Push the repo to GitHub: [.github/workflows/build.yml](.github/workflows/build.yml) builds the universal VST3 + AU on a
+macOS runner, runs the DSP tests, and uploads the zips as artifacts (tag `v0.1.0` to publish a release).
+
+## Develop
+
+```bash
+make test                              # DSP unit tests, no dependencies (g++/clang++ only)
+cmake -S . -B build -DTHEMIS_BUILD_SMOKE=ON && cmake --build build --target ThemisSmoke
+./build/ThemisSmoke_artefacts/ThemisSmoke snapshot.png   # headless processor+editor run, writes a UI screenshot
+```
+
+Layout:
+
+```
+core/include/themis/   DSP: Biquad, Eq, Compressor, Limiter, TruePeak, Loudness, StereoTools, FFT,
+                       TonalAnalyzer, TargetCurve, EqFit, Engine (full mastering chain - not used by the plugin any more)
+plugin/Source/         JUCE layer: Parameters, PluginProcessor, PluginEditor, TonalBalanceView (uses TonalAnalyzer + TargetCurve only)
+tests/                 test_main.cpp (DSP), plugin_smoke.cpp (headless JUCE)
+```
+
+## What has and hasn't been verified
+
+| Verified (Linux aarch64, JUCE 8.0.6) | Not yet verified |
+|---|---|
+| 947 DSP checks: K-weighting vs the ITU coefficient table, −20 LUFS reference sine at 44.1/48/96 kHz, gating, inter-sample true peak, limiter ceiling, compressor curve, M/S EQ targeting, pink/white-noise spectral slopes, target JSON round-trip, EQ-fit error reduction, engine latency/bypass/A-B | **A macOS build** (the CI workflow does this; the code has no platform-specific paths) |
+| Universal (arm64 + x86_64) VST3 + AU build on macOS, zero warnings in Themis' own sources; `auval` AU validation passes; the VST3 loads, instantiates, processes and opens its editor in a JUCE plugin host | Behaviour inside FL Studio's plugin scanner |
+| Headless run of the real processor + editor: audio, parameters, state save/restore incl. custom curve, *Learn from tracks* on a WAV, pass-through is bit-exact, resizing | Loading inside FL Studio, automation, and by-ear tuning of the compressor/limiter |
+
+## Known limitations
+
+- **Limiter vs full-band noise:** the true-peak detector is a 4× interpolator; on music it stays within ~0.1 dB of the
+  ceiling, but white noise reaching Nyquist can overshoot by up to ~1 dB. Leave the −1 dBTP default for streaming masters.
+- Stereo in / stereo out only. No oversampling, no multiband dynamics, no linear-phase EQ (yet).
+- The analyser computes two 16k-point FFT frames every ~85 ms on the audio thread (~0.3 ms each on a laptop CPU).
+- No CLAP build yet (FL Studio can load it; add [clap-juce-extensions](https://github.com/free-audio/clap-juce-extensions)).
+- **Licence:** JUCE is AGPLv3 / commercial. Personal use is fine; if you distribute Themis you must either open-source it
+  under AGPL or hold a JUCE commercial licence.

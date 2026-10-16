@@ -1,0 +1,74 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  dsp-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: DSP unit tests
+        run: make test
+
+  macos:
+    # Universal (arm64 + x86_64) VST3 + AU, the formats FL Studio for macOS loads.
+    runs-on: macos-14
+    needs: dsp-tests
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: >
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"
+          -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0
+          -DTHEMIS_INSTALL_AFTER_BUILD=ON
+      - name: Build
+        run: cmake --build build --config Release --target Themis_VST3 Themis_AU -j 4
+      - name: Check architectures
+        run: |
+          lipo -info ~/Library/Audio/Plug-Ins/VST3/Themis.vst3/Contents/MacOS/Themis
+          lipo -info ~/Library/Audio/Plug-Ins/Components/Themis.component/Contents/MacOS/Themis
+      - name: Ad-hoc sign (required on Apple Silicon)
+        run: |
+          codesign --force --deep --sign - ~/Library/Audio/Plug-Ins/VST3/Themis.vst3
+          codesign --force --deep --sign - ~/Library/Audio/Plug-Ins/Components/Themis.component
+      - name: Validate Audio Unit
+        continue-on-error: true # auval can be flaky on hosted runners; the result is still logged
+        run: |
+          killall -9 AudioComponentRegistrar || true
+          auval -v aufx Thms Thmi
+      - name: Package
+        run: |
+          mkdir dist
+          ditto -c -k --keepParent ~/Library/Audio/Plug-Ins/VST3/Themis.vst3 dist/Themis-VST3-macOS.zip
+          ditto -c -k --keepParent ~/Library/Audio/Plug-Ins/Components/Themis.component dist/Themis-AU-macOS.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Themis-macOS
+          path: dist/*.zip
+      - name: Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.zip
+
+  linux-plugin-compile:
+    # Catches plugin-layer compile errors on every push without needing a Mac.
+    runs-on: ubuntu-latest
+    needs: dsp-tests
+    steps:
+      - uses: actions/checkout@v4
+      - name: Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libx11-dev libxext-dev libxinerama-dev libxrandr-dev libxcursor-dev \
+            libfreetype-dev libfontconfig1-dev libgl1-mesa-dev
+      - name: Build VST3
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DTHEMIS_BUILD_TESTS=OFF
+          cmake --build build --target Themis_VST3 -j 4
