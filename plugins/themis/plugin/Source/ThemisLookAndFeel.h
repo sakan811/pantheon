@@ -1,6 +1,7 @@
 #pragma once
 
 #include <juce_gui_basics/juce_gui_basics.h>
+#include <themis/Translation.h>
 
 namespace colours
 {
@@ -13,7 +14,21 @@ inline const juce::Colour accent { 0xff2dd4bf };
 inline const juce::Colour good { 0xff4ade80 };
 inline const juce::Colour warn { 0xfff59e0b };
 inline const juce::Colour bad { 0xffef4444 };
+
+// The one mapping from a verdict to its traffic-light colour.
+inline juce::Colour forLevel (themis::Level l)
+{
+    return l == themis::Level::good ? good : l == themis::Level::warn ? warn : bad;
+}
 } // namespace colours
+
+namespace ui
+{
+inline juce::Font font (float height, int styleFlags = juce::Font::plain)
+{
+    return juce::Font (juce::FontOptions (height, styleFlags));
+}
+} // namespace ui
 
 class ThemisLookAndFeel : public juce::LookAndFeel_V4
 {
@@ -51,6 +66,6 @@ public:
 
     juce::Font getTextButtonFont (juce::TextButton&, int buttonHeight) override
     {
-        return juce::Font (juce::FontOptions (juce::jmin (13.0f, static_cast<float> (buttonHeight) * 0.6f)));
+        return ui::font (juce::jmin (13.0f, static_cast<float> (buttonHeight) * 0.6f));
     }
 };

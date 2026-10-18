@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Biquad.h"
+#include "Common.h"
 
 namespace themis
 {
@@ -38,8 +39,8 @@ public:
 
         for (int i = 0; i < n; ++i)
         {
-            const float m = (l[i] + r[i]) * 0.5f;
-            float s = (l[i] - r[i]) * 0.5f;
+            const float m = midOf (l[i], r[i]);
+            float s = sideOf (l[i], r[i]);
             if (useHp)
                 s = hp[1].process (hp[0].process (s)); // 4th-order: bass is truly collapsed
             s *= w;

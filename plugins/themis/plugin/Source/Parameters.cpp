@@ -12,12 +12,12 @@ juce::AudioProcessorValueTreeState::ParameterLayout createLayout()
     using juce::ParameterID;
 
     juce::AudioProcessorValueTreeState::ParameterLayout layout;
-    layout.add (std::make_unique<AudioParameterChoice> (ParameterID { target, 1 }, "Target Curve", targetNames(), 1));
+    layout.add (std::make_unique<AudioParameterChoice> (ParameterID { target, 1 }, "Target Curve", targetNames(), kDefaultTarget));
     layout.add (std::make_unique<AudioParameterFloat> (ParameterID { tolerance, 1 }, "Target Tolerance",
                                                        NormalisableRange<float> (0.5f, 2.0f, 0.01f), 1.0f,
                                                        FloatAttr().withStringFromValueFunction ([] (float v, int) { return juce::String (v, 2) + "x"; })));
-    layout.add (std::make_unique<AudioParameterChoice> (ParameterID { avgTime, 1 }, "Averaging", avgTimeNames, 1));
-    layout.add (std::make_unique<AudioParameterChoice> (ParameterID { device, 1 }, "Translation Device", deviceNames(), 1)); // Phone speaker
+    layout.add (std::make_unique<AudioParameterChoice> (ParameterID { avgTime, 1 }, "Averaging", avgTimeNames(), kDefaultAvgTime));
+    layout.add (std::make_unique<AudioParameterChoice> (ParameterID { device, 1 }, "Translation Device", deviceNames(), kDefaultDevice));
     return layout;
 }
 
@@ -35,6 +35,6 @@ float Reader::value (const juce::String& id) const
 
 float Reader::averagingSeconds() const
 {
-    return avgTimeSeconds[juce::jlimit (0, 3, static_cast<int> (avgTimeRaw->load()))];
+    return avgTimes[juce::jlimit (0, kNumAvgTimes - 1, static_cast<int> (avgTimeRaw->load()))].seconds;
 }
 } // namespace params

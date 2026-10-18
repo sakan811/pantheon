@@ -89,46 +89,23 @@ struct TargetCurve
         }
         // No track reaches these bands: hold the nearest band that has data (flat extension) instead of
         // inventing a -200 dB wall that would also leak into the smoothing below.
+        const auto holdFrom = [&] (int src, int dst) {
+            const auto s = static_cast<size_t> (src), d = static_cast<size_t> (dst);
+            if (hasData[d] || !hasData[s])
+                return;
+            c.medianDb[d] = c.medianDb[s];
+            c.halfWidthDb[d] = c.halfWidthDb[s];
+            hasData[d] = true;
+        };
         for (int i = 1; i < BandGrid::kNum; ++i)
-            if (!hasData[static_cast<size_t> (i)] && hasData[static_cast<size_t> (i - 1)])
-            {
-                c.medianDb[static_cast<size_t> (i)] = c.medianDb[static_cast<size_t> (i - 1)];
-                c.halfWidthDb[static_cast<size_t> (i)] = c.halfWidthDb[static_cast<size_t> (i - 1)];
-                hasData[static_cast<size_t> (i)] = true;
-            }
+            holdFrom (i - 1, i);
         for (int i = BandGrid::kNum - 2; i >= 0; --i)
-            if (!hasData[static_cast<size_t> (i)] && hasData[static_cast<size_t> (i + 1)])
-            {
-                c.medianDb[static_cast<size_t> (i)] = c.medianDb[static_cast<size_t> (i + 1)];
-                c.halfWidthDb[static_cast<size_t> (i)] = c.halfWidthDb[static_cast<size_t> (i + 1)];
-                hasData[static_cast<size_t> (i)] = true;
-            }
+            holdFrom (i + 1, i);
         // A single track is noisy at fine resolution; smooth over +/- 1/3 octave.
-        smooth (c.medianDb, 2);
-        smooth (c.halfWidthDb, 2);
+        smoothBands (c.medianDb, 2);
+        smoothBands (c.halfWidthDb, 2);
         normaliseAnchor (c.medianDb);
         return c;
-    }
-
-    static void smooth (BandArray& v, int radius)
-    {
-        BandArray out = v;
-        for (int i = 0; i < BandGrid::kNum; ++i)
-        {
-            double s = 0.0;
-            int n = 0;
-            for (int k = -radius; k <= radius; ++k)
-            {
-                const int j = i + k;
-                if (j >= 0 && j < BandGrid::kNum)
-                {
-                    s += v[static_cast<size_t> (j)];
-                    ++n;
-                }
-            }
-            out[static_cast<size_t> (i)] = static_cast<float> (s / n);
-        }
-        v = out;
     }
 
     // ---- built-in starter curves -------------------------------------------------------------

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Biquad.h"
+#include "Common.h"
 
 #include <atomic>
 #include <cmath>
@@ -35,7 +36,7 @@ public:
         highPass.setCoeffs (hp);
         lowPass1.setCoeffs (lp);
         lowPass2.setCoeffs (lp);
-        setAveragingSeconds (30.0f);
+        setAveragingSeconds (kDefaultAveragingSeconds);
         reset();
     }
 
@@ -52,7 +53,7 @@ public:
 
         for (int i = 0; i < n; ++i)
         {
-            const float x = lowPass2.process (lowPass1.process (highPass.process ((l[i] + r[i]) * 0.5f)));
+            const float x = lowPass2.process (lowPass1.process (highPass.process (midOf (l[i], r[i]))));
             peak = std::max (peak, std::abs (x));
             sumSquares += static_cast<double> (x) * x;
             if (++windowCount >= windowSamples)
@@ -79,16 +80,14 @@ private:
             return;
         }
         const double rms = std::sqrt (sumSquares / windowCount);
-        const float rmsDb = 20.0f * std::log10 (static_cast<float> (rms) + 1.0e-20f);
+        const float rmsDb = linToDb (static_cast<float> (rms));
         if (warmingUp)
             warmingUp = false; // the first window contains the filters' start-up transient
         else if (rmsDb >= kGateDb)
         {
-            const float crest = 20.0f * std::log10 (peak / static_cast<float> (rms));
+            const float crest = linToDb (peak / static_cast<float> (rms));
             ++windows;
-            const float tau = avgSeconds.load (std::memory_order_relaxed);
-            double alpha = tau <= 0.0f ? 0.0 : 1.0 - std::exp (-kWindowSeconds / tau);
-            alpha = std::max (alpha, 1.0 / windows); // cumulative mean until the EMA catches up
+            const double alpha = runningMeanWeight (emaWeight (kWindowSeconds, avgSeconds.load (std::memory_order_relaxed)), windows);
             avg += alpha * (static_cast<double> (crest) - avg);
             published.crestDb.store (static_cast<float> (avg), std::memory_order_relaxed);
             published.windows.store (windows, std::memory_order_relaxed);
@@ -131,7 +130,7 @@ private:
     bool warmingUp = true;
     double avg = 0.0;
 
-    std::atomic<float> avgSeconds { 30.0f };
+    std::atomic<float> avgSeconds { kDefaultAveragingSeconds };
     std::atomic<bool> resetFlag { false };
 
     struct Published

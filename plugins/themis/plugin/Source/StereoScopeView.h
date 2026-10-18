@@ -1,9 +1,11 @@
 #pragma once
 
+#include "MeterCell.h"
 #include "PluginProcessor.h"
 #include "ThemisLookAndFeel.h"
 
 #include <array>
+#include <functional>
 
 // Vectorscope (goniometer) of the stereo image with a phase-correlation meter underneath.
 // Vertical axis = mid, horizontal = side: mono is a vertical line, a wide mix is a fat cloud, an
@@ -25,7 +27,7 @@ public:
         const bool haveNow = scope.hasData();
         const float corr = scope.correlation();
         const uint64_t seq = scope.sequence();
-        if (seq == lastSequence && haveNow == haveData && corr == correlation)
+        if (seq == lastSequence && haveNow == haveData && std::equal_to<float>() (corr, correlation)) // exact: only skips an unchanged readout
             return;
 
         if (seq != lastSequence)
@@ -55,7 +57,7 @@ public:
         area.reduce (10.0f, 8.0f);
 
         g.setColour (colours::dim);
-        g.setFont (juce::Font (juce::FontOptions (11.5f, juce::Font::bold)));
+        g.setFont (ui::font (11.5f, juce::Font::bold));
         g.drawText ("STEREO", area.removeFromTop (14.0f).toNearestInt(), juce::Justification::left);
 
         const auto meter = area.removeFromBottom (40.0f);
@@ -94,7 +96,7 @@ private:
         g.drawLine (c.x - d, c.y + d, c.x + d, c.y - d, 1.0f);
 
         g.setColour (colours::dim);
-        g.setFont (juce::Font (juce::FontOptions (11.0f)));
+        g.setFont (ui::font (11.0f));
         const auto tag = [&] (const char* text, float x, float y) {
             g.drawText (text, juce::Rectangle<float> (14.0f, 12.0f).withCentre ({ x, y }).toNearestInt(), juce::Justification::centred);
         };
@@ -127,30 +129,27 @@ private:
     }
 
     // -1 ... +1, like a hardware phase meter: right = mono-compatible, left = phase problems.
-    void drawCorrelation (juce::Graphics& g, juce::Rectangle<float> cell) const
+    void drawCorrelation (juce::Graphics& g, juce::Rectangle<float> area) const
     {
-        g.setFont (juce::Font (juce::FontOptions (11.5f, juce::Font::bold)));
-        g.setColour (colours::dim);
-        g.drawText ("CORRELATION", cell.removeFromTop (14.0f).toNearestInt(), juce::Justification::left);
-
-        const auto bar = cell.removeFromTop (12.0f).reduced (0.0f, 3.0f);
-        g.setColour (colours::panelEdge);
-        g.fillRoundedRectangle (bar, 2.0f);
+        constexpr float kWarnAnti = 0.0f, kBadAnti = 0.3f; // anti-correlation (-correlation) beyond which the verdict worsens
+        const ui::MeterCell cell { area };
+        cell.drawTitle (g, "CORRELATION");
+        const auto bar = cell.drawTrack (g);
         g.setColour (colours::dim.withAlpha (0.6f));
         g.drawVerticalLine (juce::roundToInt (bar.getCentreX()), bar.getY() - 1.0f, bar.getBottom() + 1.0f);
 
-        g.setFont (juce::Font (juce::FontOptions (11.0f)));
+        const auto labels = cell.belowBar().toNearestInt();
+        g.setFont (ui::font (11.0f));
         g.setColour (colours::dim);
-        g.drawText ("-1", cell.toNearestInt(), juce::Justification::left);
-        g.drawText ("+1", cell.toNearestInt(), juce::Justification::right);
+        g.drawText ("-1", labels, juce::Justification::left);
+        g.drawText ("+1", labels, juce::Justification::right);
         if (!haveData)
             return;
 
-        const auto c = correlation >= 0.0f ? colours::good : correlation >= -0.3f ? colours::warn : colours::bad;
-        const float x = bar.getX() + bar.getWidth() * (correlation + 1.0f) * 0.5f;
+        const auto c = colours::forLevel (themis::translation::classify (-correlation, kWarnAnti, kBadAnti));
+        ui::MeterCell::drawMarker (g, bar, bar.getX() + bar.getWidth() * (correlation + 1.0f) * 0.5f, c);
         g.setColour (c);
-        g.fillRoundedRectangle (juce::Rectangle<float> (x - 2.0f, bar.getY() - 1.0f, 4.0f, bar.getHeight() + 2.0f), 2.0f);
-        g.drawText (juce::String (correlation, 2), cell.toNearestInt(), juce::Justification::centred);
+        g.drawText (juce::String (correlation, 2), labels, juce::Justification::centred);
     }
 
     ThemisProcessor& proc;

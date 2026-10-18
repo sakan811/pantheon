@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Common.h"
+
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -25,7 +27,7 @@ public:
 
     void prepare (double sampleRate)
     {
-        smoothing = 1.0 - std::exp (-1.0 / (kCorrelationSeconds * std::max (sampleRate, 1.0)));
+        smoothing = emaWeight (1.0 / std::max (sampleRate, 1.0), kCorrelationSeconds);
         requestReset();
     }
 

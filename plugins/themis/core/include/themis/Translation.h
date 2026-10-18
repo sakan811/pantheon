@@ -55,7 +55,7 @@ struct DeviceProfile
     void usableRangeHz (double withinDb, double& lo, double& hi) const
     {
         lo = hi = 0.0;
-        for (double f = 20.0; f <= 20000.0; f *= 1.01)
+        for (double f = BandGrid::kF0; f <= BandGrid::kMaxHz; f *= 1.01)
             if (responseDbAt (f) >= -withinDb)
             {
                 if (lo == 0.0)
@@ -98,6 +98,12 @@ inline Level classify (float value, float warnAbove, float badAbove)
     return value <= warnAbove ? Level::good : value <= badAbove ? Level::warn : Level::bad;
 }
 
+// Verdict for a deviation from a target: within the tolerance is good, within twice it a warning, beyond that bad.
+inline Level toleranceLevel (float deltaDb, float toleranceDb)
+{
+    return classify (std::abs (deltaDb), toleranceDb, 2.0f * toleranceDb);
+}
+
 // Verdict for the mono loss of one band: the low end is held to a tighter limit than the rest.
 inline Level bandMonoLevel (int band, float lossDb)
 {
@@ -130,11 +136,11 @@ inline float netChangeDb (const BandArray& spectrumDb, const BandArray& response
     {
         if (spectrumDb[i] <= kNoDataDb)
             continue;
-        const double p = std::pow (10.0, spectrumDb[i] / 10.0);
+        const double p = dbToPower (spectrumDb[i]);
         before += p;
-        after += p * std::pow (10.0, responseDb[i] / 10.0);
+        after += p * dbToPower (responseDb[i]);
     }
-    return before > 0.0 && after > 0.0 ? static_cast<float> (10.0 * std::log10 (after / before)) : 0.0f;
+    return before > 0.0 && after > 0.0 ? static_cast<float> (powerToDb (after / before, 0.0)) : 0.0f;
 }
 
 // Power lost by a sum to mono, in dB (>= 0), over the bands in [loHz, hiHz): the mid power is the part that
@@ -149,12 +155,12 @@ inline float monoLossDb (const BandArray& midDb, const BandArray& foldDb, double
         const double f = BandGrid::centreHz (i);
         if (f < loHz || f >= hiHz || midDb[s] <= kNoDataDb)
             continue;
-        const double m = std::pow (10.0, midDb[s] / 10.0);
-        const double share = std::max (std::pow (10.0, foldDb[s] / 10.0), 1.0e-6);
+        const double m = dbToPower (midDb[s]);
+        const double share = std::max (dbToPower (foldDb[s]), 1.0e-6);
         kept += m;
         total += m / share;
     }
-    return kept > 0.0 && total > 0.0 ? static_cast<float> (std::max (0.0, 10.0 * std::log10 (total / kept))) : 0.0f;
+    return kept > 0.0 && total > 0.0 ? static_cast<float> (std::max (0.0, powerToDb (total / kept, 0.0))) : 0.0f;
 }
 
 // Summarises how the measured balance is likely to translate. `fold` and `device` are optional.

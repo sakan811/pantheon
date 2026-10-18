@@ -1066,6 +1066,61 @@ TEST (translation_report_flags_bass_heavy_and_wide_low_end)
     CHECK (clean.worstBand == -1);
 }
 
+// ---- shared helpers (Common.h / TonalAnalyzer.h / Translation.h) -------------------------------------
+TEST (shared_averaging_and_db_helpers)
+{
+    // dB <-> power round trip; the floor only matters near silence
+    CHECK_NEAR (dbToPower (-10.0), 0.1, 1.0e-12);
+    CHECK_NEAR (powerToDb (dbToPower (-37.5), 0.0), -37.5, 1.0e-9);
+    CHECK (powerToDb (0.0) < -190.0);
+
+    // mid/side split reconstructs L and R
+    CHECK_NEAR (midOf (0.5f, -0.25f) + sideOf (0.5f, -0.25f), 0.5, 1.0e-7);
+    CHECK_NEAR (midOf (0.5f, -0.25f) - sideOf (0.5f, -0.25f), -0.25, 1.0e-7);
+
+    // EMA weight: tau <= 0 is the cumulative mean; otherwise 1 - e^(-step/tau)
+    CHECK_NEAR (emaWeight (0.1, 0.0), 0.0, 0.0);
+    CHECK_NEAR (emaWeight (1.0, 1.0), 1.0 - std::exp (-1.0), 1.0e-12);
+    // a running mean starts as a plain mean and settles on the EMA weight
+    CHECK_NEAR (runningMeanWeight (0.0, 1), 1.0, 0.0);
+    CHECK_NEAR (runningMeanWeight (0.0, 4), 0.25, 0.0);
+    CHECK_NEAR (runningMeanWeight (0.1, 100), 0.1, 0.0);
+
+    // the stereo scope's correlation window uses the same formula
+    StereoScope sc;
+    sc.prepare (48000.0);
+    const float l[1] = { 1.0f };
+    sc.push (l, l, 1);
+    CHECK (sc.hasData());
+}
+
+TEST (smooth_bands_averages_neighbours_and_shrinks_at_the_edges)
+{
+    BandArray v {};
+    v[10] = 6.0f;
+    smoothBands (v, 1);
+    CHECK_NEAR (v[9], 2.0, 1.0e-6);
+    CHECK_NEAR (v[10], 2.0, 1.0e-6);
+    CHECK_NEAR (v[11], 2.0, 1.0e-6);
+    CHECK_NEAR (v[8], 0.0, 1.0e-6);
+
+    BandArray edge {};
+    edge[0] = 4.0f;
+    smoothBands (edge, 1); // only two neighbours at the edge
+    CHECK_NEAR (edge[0], 2.0, 1.0e-6);
+    CHECK_NEAR (edge[1], 4.0 / 3.0, 1.0e-6);
+}
+
+TEST (tolerance_levels_use_one_scale)
+{
+    using translation::toleranceLevel;
+    CHECK (toleranceLevel (-1.5f, 2.0f) == Level::good);
+    CHECK (toleranceLevel (2.0f, 2.0f) == Level::good);
+    CHECK (toleranceLevel (-3.0f, 2.0f) == Level::warn);
+    CHECK (toleranceLevel (4.0f, 2.0f) == Level::warn);
+    CHECK (toleranceLevel (4.1f, 2.0f) == Level::bad);
+}
+
 int main()
 {
     for (const auto& t : tests())

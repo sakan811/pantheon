@@ -57,11 +57,14 @@ void ThemisProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
 
     // Measure only - the audio itself is left exactly as it came in. The FFT work happens on the analysis thread.
     const float avgSeconds = paramReader.averagingSeconds();
+    const float* l = buffer.getReadPointer (0);
+    const float* r = buffer.getReadPointer (1);
+    const int n = buffer.getNumSamples();
     analyzer.setAveragingSeconds (avgSeconds);
-    analyzer.push (buffer.getReadPointer (0), buffer.getReadPointer (1), buffer.getNumSamples());
+    analyzer.push (l, r, n);
     lowCrest.setAveragingSeconds (avgSeconds);
-    lowCrest.process (buffer.getReadPointer (0), buffer.getReadPointer (1), buffer.getNumSamples());
-    scope.push (buffer.getReadPointer (0), buffer.getReadPointer (1), buffer.getNumSamples());
+    lowCrest.process (l, r, n);
+    scope.push (l, r, n);
 }
 
 juce::AudioProcessorEditor* ThemisProcessor::createEditor()
@@ -118,9 +121,7 @@ bool ThemisProcessor::readMonoFold (themis::BandArray& out) const
 
 const themis::DeviceProfile* ThemisProcessor::activeDevice() const
 {
-    const auto& devices = themis::DeviceProfile::builtIns();
-    const int idx = static_cast<int> (paramReader.value (params::device)) - 1; // 0 is "Off"
-    return idx >= 0 && idx < static_cast<int> (devices.size()) ? &devices[static_cast<size_t> (idx)] : nullptr;
+    return params::deviceForChoice (static_cast<int> (paramReader.value (params::device)));
 }
 
 bool ThemisProcessor::readLowCrest (float& outDb) const
@@ -135,7 +136,7 @@ themis::TargetCurve ThemisProcessor::activeTarget() const
 {
     const auto& built = themis::TargetCurve::builtIns();
     const int idx = static_cast<int> (paramReader.value (params::target));
-    if (idx >= 0 && idx < static_cast<int> (built.size()))
+    if (idx >= 0 && idx < params::customTargetIndex())
         return built[static_cast<size_t> (idx)];
     const juce::ScopedLock sl (curveLock);
     return customCurveValid ? customCurve : built.front();
@@ -165,7 +166,7 @@ void ThemisProcessor::setCustomCurve (const themis::TargetCurve& c, bool selectI
         customCurveValid = true;
     }
     if (selectIt)
-        setParameterValue (params::target, static_cast<float> (themis::TargetCurve::builtIns().size()));
+        setParameterValue (params::target, static_cast<float> (params::customTargetIndex()));
 }
 
 void ThemisProcessor::learnFromFiles (const juce::Array<juce::File>& files, std::function<void (const juce::String&)> onDone)
@@ -195,8 +196,7 @@ void ThemisProcessor::learnFromFiles (const juce::Array<juce::File>& files, std:
                 continue;
             }
             themis::TonalAnalyzer trackAnalyzer;
-            trackAnalyzer.prepare (reader->sampleRate);
-            trackAnalyzer.setAveragingSeconds (0.0f); // whole-track average
+            trackAnalyzer.prepareOffline (reader->sampleRate); // whole-track average
 
             constexpr int chunkSize = 1 << 15;
             juce::AudioBuffer<float> buf (2, chunkSize);

@@ -6,7 +6,7 @@ ThemisEditor::ThemisEditor (ThemisProcessor& p)
       view (p),
       scopeView (p),
       targetBox (p.apvts, params::target, params::targetNames()),
-      avgBox (p.apvts, params::avgTime, params::avgTimeNames),
+      avgBox (p.apvts, params::avgTime, params::avgTimeNames()),
       deviceBox (p.apvts, params::device, params::deviceNames()),
       toleranceSlider (p.apvts, params::tolerance, "Tolerance")
 {
@@ -23,12 +23,12 @@ ThemisEditor::ThemisEditor (ThemisProcessor& p)
                           "analysis only, the audio is never changed). \"Off\" hides the preview.");
     deviceLabel.setText ("Translate to", juce::dontSendNotification);
     deviceLabel.setColour (juce::Label::textColourId, colours::dim);
-    deviceLabel.setFont (juce::Font (juce::FontOptions (11.5f)));
+    deviceLabel.setFont (ui::font (11.5f));
     deviceLabel.setJustificationType (juce::Justification::centredRight);
     resetButton.setTooltip ("Clear the measured curve and start averaging again.");
 
     statusLabel.setJustificationType (juce::Justification::centredLeft);
-    statusLabel.setFont (juce::Font (juce::FontOptions (12.5f)));
+    statusLabel.setFont (ui::font (12.5f));
 
     learnButton.onClick = [this] { chooseReferenceTracks(); };
     saveButton.onClick = [this] { saveCurve(); };
@@ -65,74 +65,75 @@ void ThemisEditor::setStatus (const juce::String& text, bool isError)
 }
 
 // ---- actions ------------------------------------------------------------------------------------
+// Shows a file chooser and calls `onChosen` with it if the editor still exists when the user is done.
+void ThemisEditor::launchChooser (const juce::String& title, const juce::File& start, const juce::String& patterns, int flags,
+                                  std::function<void (ThemisEditor&, const juce::FileChooser&)> onChosen)
+{
+    chooser = std::make_unique<juce::FileChooser> (title, start, patterns);
+    chooser->launchAsync (flags, [safe = juce::Component::SafePointer<ThemisEditor> (this), handler = std::move (onChosen)] (const juce::FileChooser& fc) {
+        if (safe != nullptr)
+            handler (*safe, fc);
+    });
+}
+
 void ThemisEditor::chooseReferenceTracks()
 {
-    chooser = std::make_unique<juce::FileChooser> ("Choose one or more reference tracks (final masters work best)",
-                                                   juce::File::getSpecialLocation (juce::File::userMusicDirectory),
-                                                   "*.wav;*.aif;*.aiff;*.flac;*.mp3;*.m4a;*.ogg");
-    const auto dialogFlags = juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles
-                       | juce::FileBrowserComponent::canSelectMultipleItems;
-    chooser->launchAsync (dialogFlags, [safe = juce::Component::SafePointer<ThemisEditor> (this)] (const juce::FileChooser& fc) {
-        if (safe == nullptr)
-            return;
-        const auto results = fc.getResults();
-        if (results.isEmpty())
-            return;
-        safe->setStatus ("Analysing " + juce::String (results.size()) + " track(s)...", false);
-        safe->proc.learnFromFiles (results, [safe] (const juce::String& error) {
-            if (safe == nullptr)
-                return;
-            if (error.isEmpty())
-                safe->setStatus ("Learned a new target curve and selected it (\"Custom\").", false);
-            else
-                safe->setStatus (error, true);
-        });
-    });
+    launchChooser ("Choose one or more reference tracks (final masters work best)",
+                   juce::File::getSpecialLocation (juce::File::userMusicDirectory), "*.wav;*.aif;*.aiff;*.flac;*.mp3;*.m4a;*.ogg",
+                   juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles | juce::FileBrowserComponent::canSelectMultipleItems,
+                   [] (ThemisEditor& self, const juce::FileChooser& fc) {
+                       const auto results = fc.getResults();
+                       if (results.isEmpty())
+                           return;
+                       self.setStatus ("Analysing " + juce::String (results.size()) + " track(s)...", false);
+                       self.proc.learnFromFiles (results, [safe = juce::Component::SafePointer<ThemisEditor> (&self)] (const juce::String& error) {
+                           if (safe == nullptr)
+                               return;
+                           if (error.isEmpty())
+                               safe->setStatus ("Learned a new target curve and selected it (\"Custom\").", false);
+                           else
+                               safe->setStatus (error, true);
+                       });
+                   });
 }
 
 void ThemisEditor::saveCurve()
 {
-    chooser = std::make_unique<juce::FileChooser> ("Save the active target curve",
-                                                   juce::File::getSpecialLocation (juce::File::userDocumentsDirectory)
-                                                       .getChildFile (juce::File::createLegalFileName (juce::String (proc.activeTarget().name)) + ".themiscurve"),
-                                                   "*.themiscurve");
-    const auto dialogFlags = juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles
-                       | juce::FileBrowserComponent::warnAboutOverwriting;
-    chooser->launchAsync (dialogFlags, [safe = juce::Component::SafePointer<ThemisEditor> (this)] (const juce::FileChooser& fc) {
-        if (safe == nullptr)
-            return;
-        auto file = fc.getResult();
-        if (file == juce::File())
-            return;
-        if (!file.hasFileExtension ("themiscurve")) // append: withFileExtension would cut "Mix 1.5" down to "Mix 1"
-            file = file.getSiblingFile (file.getFileName() + ".themiscurve");
-        if (file.replaceWithText (juce::String (safe->proc.activeTarget().toJson())))
-            safe->setStatus ("Saved " + file.getFileName(), false);
-        else
-            safe->setStatus ("Could not write " + file.getFullPathName(), true);
-    });
+    launchChooser ("Save the active target curve",
+                   juce::File::getSpecialLocation (juce::File::userDocumentsDirectory)
+                       .getChildFile (juce::File::createLegalFileName (juce::String (proc.activeTarget().name)) + kCurveExtension),
+                   "*" + juce::String (kCurveExtension),
+                   juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles | juce::FileBrowserComponent::warnAboutOverwriting,
+                   [] (ThemisEditor& self, const juce::FileChooser& fc) {
+                       auto file = fc.getResult();
+                       if (file == juce::File())
+                           return;
+                       if (!file.hasFileExtension (kCurveExtension)) // append: withFileExtension would cut "Mix 1.5" down to "Mix 1"
+                           file = file.getSiblingFile (file.getFileName() + kCurveExtension);
+                       if (file.replaceWithText (juce::String (self.proc.activeTarget().toJson())))
+                           self.setStatus ("Saved " + file.getFileName(), false);
+                       else
+                           self.setStatus ("Could not write " + file.getFullPathName(), true);
+                   });
 }
 
 void ThemisEditor::loadCurve()
 {
-    chooser = std::make_unique<juce::FileChooser> ("Load a target curve",
-                                                   juce::File::getSpecialLocation (juce::File::userDocumentsDirectory), "*.themiscurve");
-    const auto dialogFlags = juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles;
-    chooser->launchAsync (dialogFlags, [safe = juce::Component::SafePointer<ThemisEditor> (this)] (const juce::FileChooser& fc) {
-        if (safe == nullptr)
-            return;
-        const auto file = fc.getResult();
-        if (file == juce::File())
-            return;
-        themis::TargetCurve curve;
-        if (themis::TargetCurve::fromJson (file.loadFileAsString().toStdString(), curve))
-        {
-            safe->proc.setCustomCurve (curve, true);
-            safe->setStatus ("Loaded \"" + juce::String (curve.name) + "\".", false);
-        }
-        else
-            safe->setStatus (file.getFileName() + " is not a valid Themis curve.", true);
-    });
+    launchChooser ("Load a target curve", juce::File::getSpecialLocation (juce::File::userDocumentsDirectory), "*" + juce::String (kCurveExtension),
+                   juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
+                   [] (ThemisEditor& self, const juce::FileChooser& fc) {
+                       const auto file = fc.getResult();
+                       if (file == juce::File())
+                           return;
+                       themis::TargetCurve curve;
+                       if (themis::TargetCurve::fromJson (file.loadFileAsString().toStdString(), curve))
+                       {
+                           self.proc.setCustomCurve (curve, true);
+                           self.setStatus ("Loaded \"" + juce::String (curve.name) + "\".", false);
+                       }
+                       else
+                           self.setStatus (file.getFileName() + " is not a valid Themis curve.", true);
+                   });
 }
 
 // ---- layout -------------------------------------------------------------------------------------
@@ -141,8 +142,8 @@ void ThemisEditor::paint (juce::Graphics& g)
     g.fillAll (colours::background);
 
     g.setColour (colours::accent);
-    g.setFont (juce::Font (juce::FontOptions (22.0f, juce::Font::bold)));
-    g.drawText ("THEMIS", 14, 8, 120, 28, juce::Justification::centredLeft);
+    g.setFont (ui::font (22.0f, juce::Font::bold));
+    g.drawText ("THEMIS", 14, 8, kTitleWidth, 28, juce::Justification::centredLeft);
 }
 
 void ThemisEditor::resized()
@@ -151,7 +152,7 @@ void ThemisEditor::resized()
 
     auto head = r.removeFromTop (64);
     auto row1 = head.removeFromTop (30);
-    row1.removeFromLeft (118);
+    row1.removeFromLeft (kTitleWidth);
     targetBox.setBounds (row1.removeFromLeft (190).reduced (0, 2));
     row1.removeFromLeft (6);
     learnButton.setBounds (row1.removeFromLeft (150).reduced (0, 2));
@@ -165,7 +166,7 @@ void ThemisEditor::resized()
     deviceBox.setBounds (row1.removeFromLeft (150).reduced (0, 2));
 
     auto row2 = head.reduced (0, 2);
-    row2.removeFromLeft (118);
+    row2.removeFromLeft (kTitleWidth);
     avgBox.setBounds (row2.removeFromLeft (100));
     row2.removeFromLeft (6);
     resetButton.setBounds (row2.removeFromLeft (70));

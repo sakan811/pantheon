@@ -5,6 +5,7 @@
 #include "ThemisLookAndFeel.h"
 #include "TonalBalanceView.h"
 
+#include <functional>
 #include <memory>
 
 namespace ui
@@ -22,7 +23,7 @@ public:
         addAndMakeVisible (slider);
         label.setText (labelText, juce::dontSendNotification);
         label.setColour (juce::Label::textColourId, colours::dim);
-        label.setFont (juce::Font (juce::FontOptions (11.5f)));
+        label.setFont (ui::font (11.5f));
         addAndMakeVisible (label);
         attachment = std::make_unique<Apvts::SliderAttachment> (state, paramId, slider);
         if (auto* p = state.getParameter (paramId))
@@ -69,9 +70,14 @@ private:
     void timerCallback() override;
     void setStatus (const juce::String& text, bool isError);
 
+    void launchChooser (const juce::String& title, const juce::File& start, const juce::String& patterns, int flags,
+                        std::function<void (ThemisEditor&, const juce::FileChooser&)> onChosen);
     void chooseReferenceTracks();
     void saveCurve();
     void loadCurve();
+
+    static constexpr const char* kCurveExtension = ".themiscurve";
+    static constexpr int kTitleWidth = 120; // the "THEMIS" wordmark; the header rows start after it
 
     ThemisProcessor& proc;
     ThemisLookAndFeel laf;
