@@ -81,6 +81,17 @@ private:
     static bool differs (const T& a, const T& b) { return std::memcmp (&a, &b, sizeof (T)) != 0; }
 
     static constexpr float kTopDb = 12.0f, kBottomDb = -30.0f;
+
+    // Display slope in the style of FabFilter Pro-Q's analyzer (4.5 dB/oct). The analysis is constant-Q
+    // band energy, where pink noise (-3 dB/oct power density) is flat, so Pro-Q's 4.5 dB/oct reads as
+    // +1.5 dB/oct on this grid. Applied identically to signal and target, pivoting at 1 kHz; deltas and
+    // colours are unaffected.
+    static constexpr float kDisplaySlopeDbPerOct = 4.5f, kPinkSlopeDbPerOct = 3.0f;
+    static constexpr float kTiltDbPerOct = kDisplaySlopeDbPerOct - kPinkSlopeDbPerOct;
+    static float tiltDb (int band)
+    {
+        return kTiltDbPerOct * static_cast<float> (std::log2 (themis::BandGrid::centreHz (band) / 1000.0));
+    }
     static constexpr int kBandCount = themis::BandGrid::kNum;
 
     float xFor (double hz) const
@@ -136,13 +147,13 @@ private:
         {
             const auto s = static_cast<size_t> (i);
             const float x = xFor (themis::BandGrid::centreHz (i));
-            const float y = yFor (target.medianDb[s] + target.halfWidthDb[s] * tolerance);
+            const float y = yFor (target.medianDb[s] + target.halfWidthDb[s] * tolerance + tiltDb (i));
             i == 0 ? band.startNewSubPath (x, y) : band.lineTo (x, y);
         }
         for (int i = last; i >= 0; --i)
         {
             const auto s = static_cast<size_t> (i);
-            band.lineTo (xFor (themis::BandGrid::centreHz (i)), yFor (target.medianDb[s] - target.halfWidthDb[s] * tolerance));
+            band.lineTo (xFor (themis::BandGrid::centreHz (i)), yFor (target.medianDb[s] - target.halfWidthDb[s] * tolerance + tiltDb (i)));
         }
         band.closeSubPath();
         g.setColour (colours::accent.withAlpha (0.16f));
@@ -152,7 +163,7 @@ private:
 
         for (int i = 0; i <= last; ++i)
         {
-            const float x = xFor (themis::BandGrid::centreHz (i)), y = yFor (target.medianDb[static_cast<size_t> (i)]);
+            const float x = xFor (themis::BandGrid::centreHz (i)), y = yFor (target.medianDb[static_cast<size_t> (i)] + tiltDb (i));
             i == 0 ? median.startNewSubPath (x, y) : median.lineTo (x, y);
         }
         g.setColour (colours::accent.withAlpha (0.9f));
@@ -188,8 +199,8 @@ private:
             const float tol = target.halfWidthDb[s] * tolerance;
             const auto c = std::abs (delta) <= tol ? colours::good : std::abs (delta) <= tol * 2.0f ? colours::warn : colours::bad;
             g.setColour (c);
-            g.drawLine (xFor (themis::BandGrid::centreHz (i)), yFor (sm[s]), xFor (themis::BandGrid::centreHz (i + 1)),
-                        yFor (sm[s + 1]), 2.2f);
+            g.drawLine (xFor (themis::BandGrid::centreHz (i)), yFor (sm[s] + tiltDb (i)), xFor (themis::BandGrid::centreHz (i + 1)),
+                        yFor (sm[s + 1] + tiltDb (i + 1)), 2.2f);
         }
     }
 
@@ -294,7 +305,8 @@ private:
         const juce::String f = hz >= 1000.0 ? juce::String (hz / 1000.0, 2) + " kHz" : juce::String (static_cast<int> (hz)) + " Hz";
         g.setColour (colours::text);
         g.setFont (juce::Font (juce::FontOptions (12.0f)));
-        g.drawText (f + "   signal " + juce::String (measured[s], 1) + "   target " + juce::String (target.medianDb[s], 1) + "   delta "
+        const float tilt = tiltDb (hoverBand);
+        g.drawText (f + "   signal " + juce::String (measured[s] + tilt, 1) + "   target " + juce::String (target.medianDb[s] + tilt, 1) + "   delta "
                         + (d >= 0 ? "+" : "") + juce::String (d, 1) + " dB",
                     juce::Rectangle<int> (static_cast<int> (plot.getRight()) - 380, static_cast<int> (plot.getY()) + 2, 376, 16),
                     juce::Justification::right);
