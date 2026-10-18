@@ -17,6 +17,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout createLayout()
                                                        NormalisableRange<float> (0.5f, 2.0f, 0.01f), 1.0f,
                                                        FloatAttr().withStringFromValueFunction ([] (float v, int) { return juce::String (v, 2) + "x"; })));
     layout.add (std::make_unique<AudioParameterChoice> (ParameterID { avgTime, 1 }, "Averaging", avgTimeNames, 1));
+    layout.add (std::make_unique<AudioParameterChoice> (ParameterID { device, 1 }, "Translation Device", deviceNames(), 1)); // Phone speaker
     return layout;
 }
 

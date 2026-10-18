@@ -55,6 +55,13 @@ public:
     // Thread-safe read of the long-term spectrum. Returns false until enough audio has been analysed.
     bool readSpectrum (themis::BandArray& out) const;
 
+    // Per-band mono fold in dB (<= 0): how much of each band's power survives a sum to mono.
+    // Returns false until enough audio has been analysed.
+    bool readMonoFold (themis::BandArray& out) const;
+
+    // The playback device selected for the translation preview, or nullptr when it is "Off".
+    const themis::DeviceProfile* activeDevice() const;
+
     // Low-end (20-250 Hz) crest factor in dB. Returns false until enough audio has been measured.
     bool readLowCrest (float& outDb) const;
 

@@ -129,6 +129,41 @@ int main (int argc, char** argv)
         settle();
     }
 
+    std::printf ("[1c] mono fold + device preview: reads the analysis, nothing touches the audio\n");
+    {
+        themis::BandArray fold {};
+        const auto at = [&] (double hz) { return fold[static_cast<size_t> (std::lround (themis::BandGrid::indexForHz (hz)))]; };
+        proc.resetAnalyzer();
+        runAudio (proc, 0.1, fs, 512, 0.5f, 1);
+        settle();
+        CHECK (!proc.readMonoFold (fold), "reset should clear the mono fold");
+
+        runAudio (proc, 8.0, fs, 512, 0.5f, 1, 0.0f);
+        settle();
+        CHECK (proc.readMonoFold (fold));
+        std::printf ("    independent channels: mono fold %.2f dB @100, %.2f dB @4k\n", at (100), at (4000));
+        CHECK (std::abs (at (100) + 3.0f) < 1.5f && std::abs (at (4000) + 3.0f) < 1.5f);
+
+        proc.resetAnalyzer();
+        runAudio (proc, 0.1, fs, 512, 0.5f, 1);
+        settle(); // the reset is applied by the worker; audio pushed before that would be discarded
+        runAudio (proc, 8.0, fs, 512, 0.5f, 1, 1.0f);
+        settle();
+        CHECK (proc.readMonoFold (fold));
+        CHECK (std::abs (at (100)) < 0.5f && std::abs (at (4000)) < 0.5f);
+
+        CHECK (proc.activeDevice() != nullptr && proc.activeDevice()->name == "Phone speaker"); // default
+        auto* dev = proc.apvts.getParameter (params::device);
+        dev->setValueNotifyingHost (dev->convertTo0to1 (0.0f));
+        CHECK (proc.activeDevice() == nullptr);
+        dev->setValueNotifyingHost (dev->convertTo0to1 (static_cast<float> (params::deviceNames().size() - 1)));
+        CHECK (proc.activeDevice() == &themis::DeviceProfile::builtIns().back());
+        dev->setValueNotifyingHost (dev->convertTo0to1 (1.0f));
+        proc.resetAnalyzer();
+        runAudio (proc, 0.1, fs, 512, 0.5f, 1);
+        settle();
+    }
+
     std::printf ("[2] averaging parameter reaches the analyser setting\n");
     {
         auto* p = proc.apvts.getParameter (params::avgTime);

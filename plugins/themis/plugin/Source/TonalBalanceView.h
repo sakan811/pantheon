@@ -6,7 +6,7 @@
 #include <cstring>
 
 // The reference-curve display: long-term spectrum of the signal against the target band.
-class TonalBalanceView : public juce::Component
+class TonalBalanceView : public juce::Component, public juce::TooltipClient
 {
 public:
     explicit TonalBalanceView (ThemisProcessor& p) : proc (p) { setMouseCursor (juce::MouseCursor::CrosshairCursor); }
@@ -21,22 +21,35 @@ public:
         const double rate = proc.getSampleRate() > 0.0 ? proc.getSampleRate() : 48000.0;
         float crest = 0.0f;
         const bool haveCrestNow = proc.readLowCrest (crest);
+        themis::BandArray f {};
+        const bool haveFoldNow = proc.readMonoFold (f);
+        const int dev = static_cast<int> (proc.paramReader.value (params::device));
 
-        const bool changed = have != haveData || (have && differs (m, measured)) || haveCrestNow != haveCrest
+        const bool changed = have != haveData || haveFoldNow != haveFold || (haveFoldNow && differs (f, fold)) || dev != deviceIndex || (have && differs (m, measured)) || haveCrestNow != haveCrest
                              || (haveCrestNow && differs (crest, lowCrestDb)) || t.name != target.name
                              || differs (t.medianDb, target.medianDb) || differs (t.halfWidthDb, target.halfWidthDb)
                              || differs (tol, tolerance) || differs (rate, fs);
         if (!changed)
             return;
         haveData = have;
+        haveFold = haveFoldNow;
+        deviceIndex = dev;
         haveCrest = haveCrestNow;
         if (haveCrestNow)
             lowCrestDb = crest;
         if (have)
             measured = m;
+        if (haveFoldNow)
+            fold = f;
         target = std::move (t);
         tolerance = tol;
         fs = rate;
+
+        device = proc.activeDevice();
+        deviceResponse = device != nullptr ? device->responseDb() : themis::BandArray {};
+        if (device != nullptr)
+            device->usableRangeHz (themis::translation::kRangeFloorDb, deviceLoHz, deviceHiHz);
+        report = haveData ? themis::analyseTranslation (measured, haveFold ? &fold : nullptr, target, device) : themis::TranslationReport {};
         repaint();
     }
 
@@ -46,13 +59,20 @@ public:
         g.setColour (colours::panel);
         g.fillRoundedRectangle (area, 8.0f);
 
-        auto strip = area.removeFromBottom (44.0f).reduced (8.0f, 4.0f);
+        auto strips = area.removeFromBottom (2.0f * kStripHeight);
+        auto strip = strips.removeFromTop (kStripHeight).reduced (8.0f, 4.0f);
+        translationStrip = strips.reduced (8.0f, 4.0f);
         plot = area.reduced (40.0f, 14.0f).withTrimmedBottom (14.0f);
 
         drawGrid (g);
+        drawDeviceRange (g);
         drawTarget (g);
         if (haveData)
+        {
             drawMeasured (g);
+            drawMeasuredThroughDevice (g);
+            drawMonoFold (g);
+        }
         else
         {
             g.setColour (colours::dim);
@@ -61,18 +81,39 @@ public:
                         juce::Justification::centred);
         }
         drawBroadband (g, strip);
+        drawTranslation (g, translationStrip);
         drawHover (g);
     }
 
     void mouseMove (const juce::MouseEvent& e) override
     {
         hoverBand = plot.contains (e.position) ? bandForX (e.position.x) : -1;
+        overTranslationStrip = translationStrip.contains (e.position);
         repaint();
     }
     void mouseExit (const juce::MouseEvent&) override
     {
         hoverBand = -1;
+        overTranslationStrip = false;
         repaint();
+    }
+
+    // Tooltip over the translation readouts: the numbers behind the bars.
+    juce::String getTooltip() override
+    {
+        if (!overTranslationStrip || !haveData)
+            return {};
+        juce::StringArray lines;
+        if (report.haveDevice && device != nullptr)
+            lines.add (juce::String (device->name) + ": the track changes by " + signedDb (report.deviceChangeDb) + " overall, the target by "
+                       + signedDb (report.referenceChangeDb) + ". Positive DEVICE LOSS means this track depends more on what the device cannot "
+                         "reproduce than the target does.");
+        if (report.haveFold)
+            lines.add ("MONO FOLD is the power lost when the channels are summed (0 dB = mono-safe, 3 dB = uncorrelated, more = phase "
+                       "cancellation). The coloured strip under the curve shows it per band.");
+        lines.add ("Device responses are generic approximations, and the limits are rules of thumb; neither is measured data. "
+                   "Nothing here changes the audio.");
+        return lines.joinIntoString ("\n");
     }
 
 private:
@@ -81,6 +122,19 @@ private:
     static bool differs (const T& a, const T& b) { return std::memcmp (&a, &b, sizeof (T)) != 0; }
 
     static constexpr float kTopDb = 12.0f, kBottomDb = -30.0f;
+    static constexpr float kStripHeight = 44.0f;
+
+    static juce::String signedDb (float v) { return (v >= 0.0f ? "+" : "") + juce::String (v, 1) + " dB"; }
+    static juce::Colour colourFor (themis::Level l)
+    {
+        return l == themis::Level::good ? colours::good : l == themis::Level::warn ? colours::warn : colours::bad;
+    }
+    static juce::String hzText (double hz)
+    {
+        if (hz >= 10000.0)
+            return juce::String (juce::roundToInt (hz / 1000.0)) + " kHz";
+        return hz >= 1000.0 ? juce::String (hz / 1000.0, 1) + " kHz" : juce::String (juce::roundToInt (hz)) + " Hz";
+    }
 
     // Display slope in the style of FabFilter Pro-Q's analyzer (4.5 dB/oct). The analysis is constant-Q
     // band energy, where pink noise (-3 dB/oct power density) is flat, so Pro-Q's 4.5 dB/oct reads as
@@ -292,6 +346,140 @@ private:
                     juce::Justification::right);
     }
 
+    // Darkens the frequencies the selected device cannot reproduce (more than kRangeFloorDb below its passband).
+    void drawDeviceRange (juce::Graphics& g) const
+    {
+        if (device == nullptr)
+            return;
+        g.setColour (juce::Colours::black.withAlpha (0.28f));
+        const float loX = xFor (deviceLoHz), hiX = xFor (deviceHiHz);
+        if (loX > plot.getX() + 1.0f)
+            g.fillRect (plot.getX(), plot.getY(), loX - plot.getX(), plot.getHeight());
+        if (hiX < plot.getRight() - 1.0f)
+            g.fillRect (hiX, plot.getY(), plot.getRight() - hiX, plot.getHeight());
+    }
+
+    // The measured curve as the selected device would reproduce it (measured + the device's response).
+    void drawMeasuredThroughDevice (juce::Graphics& g) const
+    {
+        if (device == nullptr)
+            return;
+        const int last = lastDrawableBand();
+        juce::Path p;
+        for (int i = 0; i <= last; ++i)
+        {
+            const auto s = static_cast<size_t> (i);
+            const float x = xFor (themis::BandGrid::centreHz (i)), y = yFor (measured[s] + deviceResponse[s] + tiltDb (i));
+            i == 0 ? p.startNewSubPath (x, y) : p.lineTo (x, y);
+        }
+        juce::Path dashed;
+        const float dashes[] = { 5.0f, 4.0f };
+        juce::PathStrokeType (1.4f).createDashedStroke (dashed, p, dashes, 2);
+        g.saveState();
+        g.reduceClipRegion (plot.toNearestInt()); // a roll-off runs far below the plotted range
+        g.setColour (colours::text.withAlpha (0.85f));
+        g.fillPath (dashed);
+        g.restoreState();
+        g.setFont (juce::Font (juce::FontOptions (12.0f)));
+        g.drawText ("Via " + juce::String (device->name), juce::Rectangle<int> (static_cast<int> (plot.getX()) + 6, static_cast<int> (plot.getY()) + 18, 320, 16),
+                    juce::Justification::left);
+    }
+
+    // A thin strip along the bottom of the plot: how much of each band's power would be lost in a mono sum.
+    void drawMonoFold (juce::Graphics& g) const
+    {
+        if (!haveFold)
+            return;
+        constexpr float kHeight = 5.0f;
+        for (int i = 0; i <= lastDrawableBand(); ++i)
+        {
+            const auto s = static_cast<size_t> (i);
+            if (measured[s] < themis::translation::kWorstBandFloorDb) // too little energy for the verdict to matter
+                continue;
+            const float loss = -fold[s];
+            g.setColour (colourFor (themis::translation::bandMonoLevel (i, loss)).withAlpha (0.9f));
+            const float x0 = xFor (themis::BandGrid::lowEdgeHz (i)), x1 = xFor (themis::BandGrid::highEdgeHz (i));
+            g.fillRect (std::max (x0, plot.getX()), plot.getBottom() - kHeight, std::min (x1, plot.getRight()) - std::max (x0, plot.getX()), kHeight);
+        }
+    }
+
+    // One-sided meter: 0 on the left, the marker moves right as `value` grows past the warn and bad limits.
+    static void drawMeter (juce::Graphics& g, juce::Rectangle<float> cell, const juce::String& title, float value, float warnAt, float badAt,
+                           themis::Level level, const juce::String& text)
+    {
+        const float top = cell.getY();
+        g.setFont (juce::Font (juce::FontOptions (11.5f, juce::Font::bold)));
+        g.setColour (colours::dim);
+        g.drawText (title, cell.removeFromTop (14.0f).toNearestInt(), juce::Justification::left);
+
+        const auto bar = cell.removeFromTop (12.0f).reduced (0.0f, 3.0f);
+        const float scale = badAt * 1.5f;
+        const auto xFor01 = [&] (float v) { return bar.getX() + bar.getWidth() * juce::jlimit (0.0f, 1.0f, v / scale); };
+        g.setColour (colours::panelEdge);
+        g.fillRoundedRectangle (bar, 2.0f);
+        g.setColour (colours::good.withAlpha (0.25f));
+        g.fillRect (bar.getX(), bar.getY(), xFor01 (warnAt) - bar.getX(), bar.getHeight());
+        g.setColour (colours::warn.withAlpha (0.25f));
+        g.fillRect (xFor01 (warnAt), bar.getY(), xFor01 (badAt) - xFor01 (warnAt), bar.getHeight());
+        g.setColour (colours::bad.withAlpha (0.25f));
+        g.fillRect (xFor01 (badAt), bar.getY(), bar.getRight() - xFor01 (badAt), bar.getHeight());
+        g.setColour (colourFor (level));
+        g.fillRoundedRectangle (juce::Rectangle<float> (xFor01 (value) - 2.0f, bar.getY() - 1.0f, 4.0f, bar.getHeight() + 2.0f), 2.0f);
+
+        g.setFont (juce::Font (juce::FontOptions (11.0f)));
+        g.drawText (text, juce::Rectangle<int> (juce::roundToInt (cell.getX()), juce::roundToInt (top) + 14, juce::roundToInt (cell.getWidth()), 14),
+                    juce::Justification::right);
+    }
+
+    static void drawNote (juce::Graphics& g, juce::Rectangle<float> cell, const juce::String& title, const juce::String& text, juce::Colour colour)
+    {
+        g.setFont (juce::Font (juce::FontOptions (11.5f, juce::Font::bold)));
+        g.setColour (colours::dim);
+        g.drawText (title, cell.removeFromTop (14.0f).toNearestInt(), juce::Justification::left);
+        g.setFont (juce::Font (juce::FontOptions (11.5f)));
+        g.setColour (colour);
+        g.drawText (text, cell.removeFromTop (26.0f).toNearestInt(), juce::Justification::left);
+    }
+
+    // Second readout row: how the balance is likely to translate (device loss vs the target, mono compatibility).
+    void drawTranslation (juce::Graphics& g, juce::Rectangle<float> strip) const
+    {
+        namespace tr = themis::translation;
+        const float cellW = strip.getWidth() / 5.0f;
+        const auto cell = [&] (int i) { return juce::Rectangle<float> (strip.getX() + cellW * static_cast<float> (i), strip.getY(), cellW, strip.getHeight()).reduced (4.0f, 0.0f); };
+        if (!haveData)
+            return;
+
+        if (report.haveDevice)
+            drawMeter (g, cell (0), "DEVICE LOSS", report.extraLossDb, tr::kDeviceWarnDb, tr::kDeviceBadDb, report.deviceLevel,
+                       signedDb (report.extraLossDb) + " vs target");
+        else
+            drawNote (g, cell (0), "DEVICE LOSS", "choose a device", colours::dim);
+
+        if (report.haveFold)
+        {
+            drawMeter (g, cell (1), "MONO FOLD", report.monoLossDb, tr::kMonoWarnDb, tr::kMonoBadDb, report.monoLevel,
+                       "-" + juce::String (report.monoLossDb, 1) + " dB");
+            drawMeter (g, cell (2), "LOW-END MONO", report.lowMonoLossDb, tr::kLowMonoWarnDb, tr::kLowMonoBadDb, report.lowMonoLevel,
+                       "-" + juce::String (report.lowMonoLossDb, 1) + " dB < " + juce::String (juce::roundToInt (tr::kLowEndHz)) + " Hz");
+            if (report.worstBand >= 0)
+                drawNote (g, cell (3), "WORST BAND",
+                          hzText (themis::BandGrid::centreHz (report.worstBand)) + "  -" + juce::String (report.worstBandLossDb, 1) + " dB",
+                          colourFor (tr::bandMonoLevel (report.worstBand, report.worstBandLossDb)));
+            else
+                drawNote (g, cell (3), "WORST BAND", "-", colours::dim);
+        }
+        else
+        {
+            drawNote (g, cell (1), "MONO FOLD", "measuring...", colours::dim);
+        }
+
+        if (device != nullptr)
+            drawNote (g, cell (4), "DEVICE RANGE", hzText (deviceLoHz) + " - " + hzText (deviceHiHz), colours::dim);
+        else
+            drawNote (g, cell (4), "DEVICE RANGE", "-", colours::dim);
+    }
+
     void drawHover (juce::Graphics& g) const
     {
         if (hoverBand < 0 || !haveData)
@@ -306,15 +494,31 @@ private:
         g.setColour (colours::text);
         g.setFont (juce::Font (juce::FontOptions (12.0f)));
         const float tilt = tiltDb (hoverBand);
-        g.drawText (f + "   signal " + juce::String (measured[s] + tilt, 1) + "   target " + juce::String (target.medianDb[s] + tilt, 1) + "   delta "
-                        + (d >= 0 ? "+" : "") + juce::String (d, 1) + " dB",
-                    juce::Rectangle<int> (static_cast<int> (plot.getRight()) - 380, static_cast<int> (plot.getY()) + 2, 376, 16),
+        juce::String text = f + "   signal " + juce::String (measured[s] + tilt, 1) + "   target " + juce::String (target.medianDb[s] + tilt, 1)
+                            + "   delta " + (d >= 0 ? "+" : "") + juce::String (d, 1) + " dB";
+        if (haveFold)
+            text += "   mono -" + juce::String (-fold[s], 1) + " dB";
+        g.drawText (text, juce::Rectangle<int> (static_cast<int> (plot.getRight()) - 520, static_cast<int> (plot.getY()) + 2, 516, 16),
                     juce::Justification::right);
+        if (device != nullptr)
+            g.drawText ("via " + juce::String (device->name) + "   " + juce::String (measured[s] + deviceResponse[s] + tilt, 1) + "   (device "
+                            + signedDb (deviceResponse[s]) + ")",
+                        juce::Rectangle<int> (static_cast<int> (plot.getRight()) - 520, static_cast<int> (plot.getY()) + 18, 516, 16),
+                        juce::Justification::right);
     }
 
     ThemisProcessor& proc;
     themis::BandArray measured {};
+    themis::BandArray fold {};           // mono fold per band (dB, <= 0)
+    themis::BandArray deviceResponse {};
     themis::TargetCurve target;
+    themis::TranslationReport report;
+    const themis::DeviceProfile* device = nullptr;
+    double deviceLoHz = 20.0, deviceHiHz = 20000.0;
+    int deviceIndex = -1;
+    bool haveFold = false;
+    bool overTranslationStrip = false;
+    juce::Rectangle<float> translationStrip;
     bool haveData = false;
     bool haveCrest = false;
     float lowCrestDb = 0.0f;

@@ -7,17 +7,24 @@ ThemisEditor::ThemisEditor (ThemisProcessor& p)
       scopeView (p),
       targetBox (p.apvts, params::target, params::targetNames()),
       avgBox (p.apvts, params::avgTime, params::avgTimeNames),
+      deviceBox (p.apvts, params::device, params::deviceNames()),
       toleranceSlider (p.apvts, params::tolerance, "Tolerance")
 {
     setLookAndFeel (&laf);
 
     addAndMakeVisible (view);
     addAndMakeVisible (scopeView);
-    for (auto* c : std::initializer_list<juce::Component*> { &targetBox, &avgBox, &learnButton, &saveButton, &loadButton, &resetButton,
+    for (auto* c : std::initializer_list<juce::Component*> { &targetBox, &avgBox, &deviceBox, &deviceLabel, &learnButton, &saveButton, &loadButton, &resetButton,
                                                               &statusLabel, &toleranceSlider })
         addAndMakeVisible (c);
 
     avgBox.setTooltip ("Averaging window for the long-term curve.");
+    deviceBox.setTooltip ("Preview how the balance would translate to a typical playback device (approximate response; "
+                          "analysis only, the audio is never changed). \"Off\" hides the preview.");
+    deviceLabel.setText ("Translate to", juce::dontSendNotification);
+    deviceLabel.setColour (juce::Label::textColourId, colours::dim);
+    deviceLabel.setFont (juce::Font (juce::FontOptions (11.5f)));
+    deviceLabel.setJustificationType (juce::Justification::centredRight);
     resetButton.setTooltip ("Clear the measured curve and start averaging again.");
 
     statusLabel.setJustificationType (juce::Justification::centredLeft);
@@ -152,6 +159,10 @@ void ThemisEditor::resized()
     saveButton.setBounds (row1.removeFromLeft (84).reduced (0, 2));
     row1.removeFromLeft (4);
     loadButton.setBounds (row1.removeFromLeft (84).reduced (0, 2));
+    row1.removeFromLeft (10);
+    deviceLabel.setBounds (row1.removeFromLeft (76));
+    row1.removeFromLeft (4);
+    deviceBox.setBounds (row1.removeFromLeft (150).reduced (0, 2));
 
     auto row2 = head.reduced (0, 2);
     row2.removeFromLeft (118);

@@ -9,6 +9,7 @@
 #include <themis/StereoTools.h>
 #include <themis/TargetCurve.h>
 #include <themis/TonalAnalyzer.h>
+#include <themis/Translation.h>
 
 #include <chrono>
 #include <cstdio>
@@ -890,6 +891,179 @@ TEST (engine_latency_bypass_ceiling_and_ab)
         const double outDb = rmsDb (out2, 96000, out2.size()), inDb = rmsDb (tail, 96000, tail.size());
         CHECK_NEAR (outDb - inDb, e.meters().abMatchDb, 0.3);
     }
+}
+
+// ---- mono fold + device translation --------------------------------------------------------------
+static BandArray analyseFold (const std::vector<float>& l, const std::vector<float>& r, double fs)
+{
+    TonalAnalyzer a;
+    a.prepare (fs);
+    a.setAveragingSeconds (0.0f);
+    for (size_t pos = 0; pos < l.size(); pos += 4096)
+        a.process (l.data() + pos, r.data() + pos, static_cast<int> (std::min<size_t> (4096, l.size() - pos)));
+    CHECK (a.hasMonoFoldData());
+    BandArray fold {};
+    a.readMonoFoldDb (fold);
+    return fold;
+}
+
+static double foldAt (const BandArray& f, double hz) { return f[static_cast<size_t> (std::lround (BandGrid::indexForHz (hz)))]; }
+
+TEST (mono_fold_follows_channel_relationship)
+{
+    const double fs = 48000;
+    const size_t n = static_cast<size_t> (fs * 20);
+    const auto a = pinkNoise (n, 3), b = pinkNoise (n, 4);
+    std::vector<float> inverted (n), silent (n, 0.0f);
+    for (size_t i = 0; i < n; ++i)
+        inverted[i] = -a[i];
+
+    const auto mono = analyseFold (a, a, fs), wide = analyseFold (a, b, fs), oneSided = analyseFold (a, silent, fs),
+               opposed = analyseFold (a, inverted, fs);
+    for (double hz : { 63.0, 250.0, 1000.0, 4000.0, 12000.0 })
+    {
+        CHECK_NEAR (foldAt (mono, hz), 0.0, 0.05);       // nothing lost
+        CHECK_NEAR (foldAt (wide, hz), -3.0, 1.0);       // uncorrelated: half the power survives
+        CHECK_NEAR (foldAt (oneSided, hz), -3.0, 0.05);  // one channel only: the same
+        CHECK (foldAt (opposed, hz) < -30.0);            // cancels
+    }
+}
+
+TEST (mono_fold_is_level_independent_and_resolves_frequency)
+{
+    const double fs = 48000;
+    const size_t n = static_cast<size_t> (fs * 12);
+    // Pink noise common to both channels, a 100 Hz tone in phase, a 4 kHz tone in opposite phase.
+    auto l = pinkNoise (n, 5, 0.05f);
+    auto r = l;
+    const auto low = sine (fs, 100, -10, 12.0), high = sine (fs, 4000, -10, 12.0);
+    for (size_t i = 0; i < n; ++i)
+    {
+        l[i] += low[i] + high[i];
+        r[i] += low[i] - high[i];
+    }
+    const auto fold = analyseFold (l, r, fs);
+    CHECK_NEAR (foldAt (fold, 100), 0.0, 0.5);
+    CHECK (foldAt (fold, 4000) < -10.0);
+
+    auto quiet = [&] (std::vector<float> v) {
+        for (auto& x : v)
+            x *= 0.001f;
+        return v;
+    };
+    const auto fold2 = analyseFold (quiet (l), quiet (r), fs);
+    for (int i = 0; i <= BandGrid::indexForHz (16000.0); ++i)
+        CHECK_NEAR (fold2[static_cast<size_t> (i)], fold[static_cast<size_t> (i)], 0.05);
+}
+
+TEST (mono_fold_resets_and_is_zero_without_data)
+{
+    const double fs = 48000;
+    const auto a = pinkNoise (static_cast<size_t> (fs * 6), 3), b = pinkNoise (a.size(), 4);
+    TonalAnalyzer t;
+    t.prepare (fs);
+    CHECK (!t.hasMonoFoldData());
+    t.process (a.data(), b.data(), static_cast<int> (a.size()));
+    CHECK (t.hasMonoFoldData());
+    t.requestReset();
+    t.process (a.data(), b.data(), 1024);
+    CHECK (!t.hasMonoFoldData());
+    BandArray fold {};
+    t.readMonoFoldDb (fold);
+    for (float v : fold)
+        CHECK (v == 0.0f);
+}
+
+TEST (device_profiles_have_plausible_responses)
+{
+    const auto& devices = DeviceProfile::builtIns();
+    CHECK (devices.size() >= 5);
+    for (const auto& d : devices)
+    {
+        // roll-off below the bass limit, nearly passband in the mids
+        CHECK (d.responseDbAt (20.0) < d.responseDbAt (1000.0) - 6.0);
+        CHECK (std::abs (d.responseDbAt (1000.0)) < 6.0);
+        double lo = 0, hi = 0;
+        d.usableRangeHz (translation::kRangeFloorDb, lo, hi);
+        CHECK (lo >= 20.0 && lo < 1000.0 && hi > 5000.0);
+    }
+    const DeviceProfile& phone = devices[0];
+    CHECK (phone.name == "Phone speaker");
+    CHECK (phone.responseDbAt (100.0) < -20.0);
+    CHECK_NEAR (phone.responseDbAt (450.0), -3.0 + phone.bumps[0].gainDb * std::exp (-0.5 * std::pow (std::log2 (450.0 / 2500.0) / 0.8, 2.0)), 0.1);
+    // a bigger speaker reaches lower than a phone
+    double phoneLo = 0, phoneHi = 0, monLo = 0, monHi = 0;
+    phone.usableRangeHz (translation::kRangeFloorDb, phoneLo, phoneHi);
+    DeviceProfile::builtIns().back().usableRangeHz (translation::kRangeFloorDb, monLo, monHi);
+    CHECK (monLo < phoneLo);
+    // the car profile has a bass lift
+    const DeviceProfile* car = nullptr;
+    for (const auto& d : devices)
+        if (d.name == "Car")
+            car = &d;
+    CHECK (car != nullptr && car->responseDbAt (60.0) > 2.0);
+}
+
+TEST (translation_report_flags_bass_heavy_and_wide_low_end)
+{
+    const auto target = TargetCurve::builtIns().front();
+    const DeviceProfile& phone = DeviceProfile::builtIns().front();
+
+    // the track equals the target: no extra loss
+    auto same = analyseTranslation (target.medianDb, nullptr, target, &phone);
+    CHECK (same.haveDevice && !same.haveFold);
+    CHECK_NEAR (same.extraLossDb, 0.0, 1.0e-4);
+    CHECK (same.deviceChangeDb < -1.0); // a phone drops the energy below ~450 Hz
+    CHECK (same.deviceLevel == Level::good);
+
+    // +8 dB below 150 Hz: a phone loses much more of this one
+    BandArray heavy = target.medianDb;
+    for (int i = 0; i < BandGrid::kNum; ++i)
+        if (BandGrid::centreHz (i) < 150.0)
+            heavy[static_cast<size_t> (i)] += 8.0f;
+    const auto bass = analyseTranslation (heavy, nullptr, target, &phone);
+    CHECK (bass.extraLossDb > translation::kDeviceBadDb);
+    CHECK (bass.deviceLevel == Level::bad);
+    // ... a monitor that reaches down to 55 Hz copes much better, and earbuds with a bass lift are unaffected
+    const auto onMonitors = analyseTranslation (heavy, nullptr, target, &DeviceProfile::builtIns().back());
+    CHECK (onMonitors.extraLossDb < bass.extraLossDb * 0.5f);
+    const auto onEarbuds = analyseTranslation (heavy, nullptr, target, &DeviceProfile::builtIns()[2]);
+    CHECK (std::abs (onEarbuds.extraLossDb) < 0.5f);
+
+    // overall mono loss of a uniform -3 dB fold, and a low end that cancels while the rest is mono
+    BandArray fold {};
+    fold.fill (-3.0f);
+    auto wide = analyseTranslation (target.medianDb, &fold, target, nullptr);
+    CHECK (wide.haveFold && !wide.haveDevice);
+    CHECK_NEAR (wide.monoLossDb, 3.0, 0.01);
+    CHECK_NEAR (wide.lowMonoLossDb, 3.0, 0.01);
+    CHECK (wide.monoLevel == Level::warn && wide.lowMonoLevel == Level::bad);
+
+    fold.fill (0.0f);
+    for (int i = 0; i < BandGrid::kNum; ++i)
+        if (BandGrid::centreHz (i) < 100.0)
+            fold[static_cast<size_t> (i)] = -10.0f;
+    fold[static_cast<size_t> (std::lround (BandGrid::indexForHz (60.0)))] = -20.0f;
+    const auto cancel = analyseTranslation (target.medianDb, &fold, target, nullptr);
+    CHECK (cancel.lowMonoLossDb > translation::kLowMonoBadDb);
+    CHECK (cancel.lowMonoLevel == Level::bad);
+    CHECK (cancel.monoLossDb < cancel.lowMonoLossDb);
+    CHECK (cancel.worstBand == static_cast<int> (std::lround (BandGrid::indexForHz (60.0))));
+    CHECK_NEAR (cancel.worstBandLossDb, 20.0, 1.0e-4);
+
+    // single-band verdicts: bass is held to a tighter limit than the highs
+    CHECK (translation::bandMonoLevel (0, 2.0f) == Level::warn);
+    CHECK (translation::bandMonoLevel (40, 2.0f) == Level::good);
+    CHECK (translation::bandMonoLevel (40, 7.0f) == Level::bad);
+
+    // bands the signal does not contain (above Nyquist) are ignored
+    BandArray lowRate = target.medianDb;
+    for (int i = 50; i < BandGrid::kNum; ++i)
+        lowRate[static_cast<size_t> (i)] = -200.0f;
+    fold.fill (0.0f);
+    const auto clean = analyseTranslation (lowRate, &fold, target, nullptr);
+    CHECK_NEAR (clean.monoLossDb, 0.0, 1.0e-4);
+    CHECK (clean.worstBand == -1);
 }
 
 int main()

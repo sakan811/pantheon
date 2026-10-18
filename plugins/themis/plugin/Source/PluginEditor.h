@@ -79,7 +79,8 @@ private:
     TonalBalanceView view;
     StereoScopeView scopeView;
 
-    ui::Choice targetBox, avgBox;
+    ui::Choice targetBox, avgBox, deviceBox;
+    juce::Label deviceLabel;
     juce::TextButton learnButton { "Learn from tracks..." }, saveButton { "Save curve" }, loadButton { "Load curve" },
         resetButton { "Reset" };
     juce::Label statusLabel;

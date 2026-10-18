@@ -63,14 +63,18 @@ inline void normaliseAnchor (BandArray& db)
 // out relative to that running level, never against a fixed dBFS threshold. The published curve is then
 // shifted so the anchor region averages 0 dB.
 //
-// Threading: the audio thread only calls push(), which copies the mid signal into a lock-free ring and
+// Threading: the audio thread only calls push(), which copies the mid and side signals into lock-free rings and
 // does no FFT work. A worker thread calls pump() every few milliseconds to run the analysis; UI threads
 // read the published values. process() = push() + pump() on one thread, for offline use and tests.
 // prepare() must not run concurrently with push()/pump().
+//
+// Mono fold: the same frames also yield, per band, how much of the stereo signal's power survives summing to mono,
+// 10 log10(M / (M + S)) with M = |(L+R)/2|^2 and S = |(L-R)/2|^2: 0 dB for a mono signal, -3 dB for uncorrelated
+// channels, strongly negative for out-of-phase content. Like the tonal curve it is level independent.
 class TonalAnalyzer
 {
 public:
-    static constexpr float kSilenceDb = -90.0f;      // frames below this RMS (dBFS) are digital silence / dither
+    static constexpr float kSilenceDb = -90.0f;      // frames below this RMS (dBFS, mean of L and R power) are digital silence / dither
     static constexpr float kRelativeGateDb = -35.0f; // frames this far below the running mean power are ignored
 
     TonalAnalyzer() = default;
@@ -101,6 +105,9 @@ public:
         power.assign (static_cast<size_t> (fftSize / 2 + 1), 0.0f);
         ringSize = static_cast<uint64_t> (fftSize) * kRingFrames; // power of two: indices wrap with a mask
         ring.assign (static_cast<size_t> (ringSize), 0.0f);
+        sideRing.assign (static_cast<size_t> (ringSize), 0.0f);
+        sideFrame.assign (static_cast<size_t> (fftSize), 0.0f);
+        sidePower.assign (static_cast<size_t> (fftSize / 2 + 1), 0.0f);
         writeCount.store (0, std::memory_order_relaxed);
         buildBandMap();
         setAveragingSeconds (30.0f);
@@ -117,13 +124,13 @@ public:
     void push (const float* l, const float* r, int n)
     {
         const uint64_t w = writeCount.load (std::memory_order_relaxed);
-        const size_t pos = static_cast<size_t> (w & (ringSize - 1));
-        const int first = static_cast<int> (std::min<uint64_t> (static_cast<uint64_t> (n), ringSize - pos));
-        float* dst = ring.data() + pos;
-        for (int i = 0; i < first; ++i)
-            dst[i] = (l[i] + r[i]) * 0.5f;
-        for (int i = first; i < n; ++i)
-            ring[static_cast<size_t> (i - first)] = (l[i] + r[i]) * 0.5f;
+        const uint64_t mask = ringSize - 1;
+        for (int i = 0; i < n; ++i)
+        {
+            const size_t pos = static_cast<size_t> ((w + static_cast<uint64_t> (i)) & mask);
+            ring[pos] = (l[i] + r[i]) * 0.5f;
+            sideRing[pos] = (l[i] - r[i]) * 0.5f;
+        }
         writeCount.store (w + static_cast<uint64_t> (n), std::memory_order_release);
     }
 
@@ -173,6 +180,18 @@ public:
             out[i] = published.db[i].load (std::memory_order_relaxed);
     }
 
+    // True once enough audio has been averaged for the mono-fold curve (~1 s). Unlike hasData() this also holds
+    // for a signal whose mid is silent (fully out-of-phase).
+    bool hasMonoFoldData() const { return published.foldFrames.load (std::memory_order_relaxed) >= 8; }
+
+    // Latest mono-fold curve in dB (<= 0): the share of each band's power that survives a sum to mono.
+    // Bands above the Nyquist frequency read 0.
+    void readMonoFoldDb (BandArray& out) const
+    {
+        for (size_t i = 0; i < out.size(); ++i)
+            out[i] = published.fold[i].load (std::memory_order_relaxed);
+    }
+
     // Analyse an entire buffer offline (reference-track learning). Returns false if too short/quiet.
     static bool analyseOffline (const float* l, const float* r, size_t numSamples, double sampleRate, BandArray& out)
     {
@@ -220,6 +239,38 @@ private:
         }
     }
 
+    // Energy per band: the mean power over the bins the band covers, times the band's true width in bins.
+    // Returns the sum over the bands that exist at this sample rate.
+    double bandEnergies (const std::vector<float>& pw, std::array<double, BandGrid::kNum>& e) const
+    {
+        const int half = fftSize / 2;
+        double total = 0.0;
+        for (int b = 0; b < BandGrid::kNum; ++b)
+        {
+            const auto& m = bandMap[static_cast<size_t> (b)];
+            double v = 0.0;
+            if (!m.valid)
+                v = 1.0e-20;
+            else if (m.lastBin >= m.firstBin)
+            {
+                double sum = 0.0;
+                for (int k = m.firstBin; k <= m.lastBin; ++k)
+                    sum += pw[static_cast<size_t> (k)];
+                v = sum / (m.lastBin - m.firstBin + 1) * m.binsWide;
+            }
+            else
+            {
+                const float p0 = pw[static_cast<size_t> (m.interpLo)];
+                const float p1 = pw[static_cast<size_t> (std::min (m.interpLo + 1, half))];
+                v = (p0 + (p1 - p0) * m.interpFrac) * m.binsWide;
+            }
+            e[static_cast<size_t> (b)] = v;
+            if (m.valid)
+                total += v;
+        }
+        return total;
+    }
+
     void analyseFrame (uint64_t start)
     {
         const size_t mask = static_cast<size_t> (ringSize - 1);
@@ -227,9 +278,11 @@ private:
         double energy = 0.0;
         for (int i = 0; i < fftSize; ++i)
         {
-            const float v = ring[(s0 + static_cast<size_t> (i)) & mask];
-            frame[static_cast<size_t> (i)] = v * window[static_cast<size_t> (i)];
-            energy += static_cast<double> (v) * v;
+            const size_t pos = (s0 + static_cast<size_t> (i)) & mask;
+            const float m = ring[pos], sd = sideRing[pos];
+            frame[static_cast<size_t> (i)] = m * window[static_cast<size_t> (i)];
+            sideFrame[static_cast<size_t> (i)] = sd * window[static_cast<size_t> (i)];
+            energy += static_cast<double> (m) * m + static_cast<double> (sd) * sd; // = (L^2 + R^2) / 2
         }
         const double meanPower = energy / fftSize;
         const float rmsDb = 10.0f * std::log10 (static_cast<float> (meanPower) + 1.0e-20f);
@@ -248,44 +301,37 @@ private:
             return;
 
         fft->powerSpectrum (frame.data(), power.data(), powerNorm);
-        const int half = fftSize / 2;
+        fft->powerSpectrum (sideFrame.data(), sidePower.data(), powerNorm);
 
-        // Energy per band: the mean power over the bins the band covers, times the band's true width in bins.
-        std::array<double, BandGrid::kNum> e {};
-        double total = 0.0;
-        for (int b = 0; b < BandGrid::kNum; ++b)
-        {
-            const auto& m = bandMap[static_cast<size_t> (b)];
-            double v = 0.0;
-            if (!m.valid)
-                v = 1.0e-20;
-            else if (m.lastBin >= m.firstBin)
-            {
-                double sum = 0.0;
-                for (int k = m.firstBin; k <= m.lastBin; ++k)
-                    sum += power[static_cast<size_t> (k)];
-                v = sum / (m.lastBin - m.firstBin + 1) * m.binsWide;
-            }
-            else
-            {
-                const float p0 = power[static_cast<size_t> (m.interpLo)];
-                const float p1 = power[static_cast<size_t> (std::min (m.interpLo + 1, half))];
-                v = (p0 + (p1 - p0) * m.interpFrac) * m.binsWide;
-            }
-            e[static_cast<size_t> (b)] = v;
-            if (m.valid)
-                total += v;
-        }
-        if (total < 1.0e-20)
+        std::array<double, BandGrid::kNum> e {}, eSide {};
+        const double total = bandEnergies (power, e);
+        const double totalSide = bandEnergies (sidePower, eSide);
+        const double totalBoth = total + totalSide;
+        if (totalBoth < 1.0e-20)
             return;
 
-        ++frameCount;
-        const double alpha = std::max (smoothing, 1.0 / static_cast<double> (frameCount)); // cumulative mean until EMA catches up
-        const double invTotal = 1.0 / total;
+        // Mono fold: each band's mid and side power as a share of this frame's total, averaged like the tonal curve.
+        ++foldCount;
+        const double foldAlpha = std::max (smoothing, 1.0 / static_cast<double> (foldCount));
+        const double invBoth = 1.0 / totalBoth;
         for (size_t b = 0; b < e.size(); ++b)
         {
-            const double v = bandMap[b].valid ? e[b] * invTotal : 1.0e-20; // this frame's spectral shape, level removed
-            avg[b] += alpha * (v - avg[b]);
+            if (!bandMap[b].valid)
+                continue;
+            foldMid[b] += foldAlpha * (e[b] * invBoth - foldMid[b]);
+            foldSide[b] += foldAlpha * (eSide[b] * invBoth - foldSide[b]);
+        }
+
+        if (total >= 1.0e-20) // a fully out-of-phase frame has no mid and nothing to add to the tonal curve
+        {
+            ++frameCount;
+            const double alpha = std::max (smoothing, 1.0 / static_cast<double> (frameCount)); // cumulative mean until EMA catches up
+            const double invTotal = 1.0 / total;
+            for (size_t b = 0; b < e.size(); ++b)
+            {
+                const double v = bandMap[b].valid ? e[b] * invTotal : 1.0e-20; // this frame's spectral shape, level removed
+                avg[b] += alpha * (v - avg[b]);
+            }
         }
         publish();
     }
@@ -297,14 +343,23 @@ private:
             db[i] = 10.0f * std::log10 (static_cast<float> (avg[i]) + 1.0e-20f);
         normaliseAnchor (db);
         for (size_t i = 0; i < db.size(); ++i)
+        {
             published.db[i].store (db[i], std::memory_order_relaxed);
+            const double both = foldMid[i] + foldSide[i];
+            published.fold[i].store (bandMap[i].valid && both > 0.0 ? 10.0f * std::log10 (static_cast<float> (foldMid[i] / both) + 1.0e-12f) : 0.0f,
+                                     std::memory_order_relaxed);
+        }
         published.frames.store (frameCount, std::memory_order_relaxed);
+        published.foldFrames.store (foldCount, std::memory_order_relaxed);
     }
 
     void reset()
     {
         avg.fill (0.0);
+        foldMid.fill (0.0);
+        foldSide.fill (0.0);
         frameCount = 0;
+        foldCount = 0;
         refFrames = 0;
         refPower = 0.0;
         // Only audio pushed from now on counts. Frames end every `hop` samples once a full frame of new data exists.
@@ -315,21 +370,26 @@ private:
             nextFrameEnd += static_cast<uint64_t> (hop);
         for (auto& v : published.db)
             v.store (-100.0f, std::memory_order_relaxed);
+        for (auto& v : published.fold)
+            v.store (0.0f, std::memory_order_relaxed);
         published.frames.store (0, std::memory_order_relaxed);
+        published.foldFrames.store (0, std::memory_order_relaxed);
     }
 
     double fs = 48000.0;
     int fftSize = 16384, hop = 4096;
     static constexpr uint64_t kRingFrames = 16; // ring length in FFT frames (~5 s at 48 kHz)
     std::unique_ptr<RealFFT> fft;
-    std::vector<float> window, ring, frame, power;
+    std::vector<float> window, ring, sideRing, frame, sideFrame, power, sidePower;
     float powerNorm = 1.0f;
     std::array<BandMap, BandGrid::kNum> bandMap {};
     std::array<double, BandGrid::kNum> avg {};
+    std::array<double, BandGrid::kNum> foldMid {}, foldSide {}; // per-band mid / side power as a share of the frame total
     uint64_t ringSize = 0;
     std::atomic<uint64_t> writeCount { 0 }; // total samples pushed since prepare(); the ring index is count & (ringSize-1)
     uint64_t nextFrameEnd = 0;              // worker-side: absolute sample index where the next frame ends
     int frameCount = 0;
+    int foldCount = 0;
     int refFrames = 0;     // non-silent frames seen, for the running level
     double refPower = 0.0; // running mean frame power, the reference for the relative gate
     double hopPhase = 0.0;
@@ -340,8 +400,14 @@ private:
     struct Published
     {
         std::array<std::atomic<float>, BandGrid::kNum> db;
+        std::array<std::atomic<float>, BandGrid::kNum> fold;
         std::atomic<int> frames { 0 };
-        Published() { for (auto& v : db) v.store (-100.0f); }
+        std::atomic<int> foldFrames { 0 };
+        Published()
+        {
+            for (auto& v : db) v.store (-100.0f);
+            for (auto& v : fold) v.store (0.0f);
+        }
     } published;
 };
 } // namespace themis

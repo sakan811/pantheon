@@ -3,6 +3,7 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <themis/TargetCurve.h>
 #include <themis/TonalAnalyzer.h>
+#include <themis/Translation.h>
 
 namespace params
 {
@@ -19,9 +20,20 @@ inline juce::StringArray targetNames()
     return n;
 }
 
+// Playback-device choices for the translation preview: "Off", then every built-in device profile.
+inline juce::StringArray deviceNames()
+{
+    juce::StringArray n;
+    n.add ("Off");
+    for (const auto& d : themis::DeviceProfile::builtIns())
+        n.add (d.name);
+    return n;
+}
+
 inline constexpr const char* target = "target";
 inline constexpr const char* tolerance = "tolerance";
 inline constexpr const char* avgTime = "avgTime";
+inline constexpr const char* device = "device";
 
 juce::AudioProcessorValueTreeState::ParameterLayout createLayout();
 

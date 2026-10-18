@@ -108,6 +108,21 @@ bool ThemisProcessor::readSpectrum (themis::BandArray& out) const
     return true;
 }
 
+bool ThemisProcessor::readMonoFold (themis::BandArray& out) const
+{
+    if (!analyzer.hasMonoFoldData())
+        return false;
+    analyzer.readMonoFoldDb (out);
+    return true;
+}
+
+const themis::DeviceProfile* ThemisProcessor::activeDevice() const
+{
+    const auto& devices = themis::DeviceProfile::builtIns();
+    const int idx = static_cast<int> (paramReader.value (params::device)) - 1; // 0 is "Off"
+    return idx >= 0 && idx < static_cast<int> (devices.size()) ? &devices[static_cast<size_t> (idx)] : nullptr;
+}
+
 bool ThemisProcessor::readLowCrest (float& outDb) const
 {
     if (!lowCrest.hasData())
