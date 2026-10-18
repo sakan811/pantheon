@@ -41,10 +41,14 @@ static std::vector<float> pinkNoise (size_t n, unsigned seed, float amp)
     return v;
 }
 
-static void runAudio (ThemisProcessor& proc, double seconds, double fs, int block, float amp, unsigned seed)
+// `coherence` mixes the left channel into the right one: 0 = independent channels, 1 = mono.
+static void runAudio (ThemisProcessor& proc, double seconds, double fs, int block, float amp, unsigned seed, float coherence = 0.0f)
 {
     const size_t total = static_cast<size_t> (seconds * fs);
-    const auto l = pinkNoise (total, seed, amp), r = pinkNoise (total, seed + 1, amp);
+    const auto l = pinkNoise (total, seed, amp);
+    auto r = pinkNoise (total, seed + 1, amp);
+    for (size_t i = 0; i < total; ++i)
+        r[i] += coherence * (l[i] - r[i]);
     juce::AudioBuffer<float> buf (2, block);
     juce::MidiBuffer midi;
     for (size_t pos = 0; pos < total; pos += static_cast<size_t> (block))
@@ -104,6 +108,25 @@ int main (int argc, char** argv)
         settle();
         CHECK (!proc.readSpectrum (m), "reset should clear the curve");
         CHECK (!proc.readLowCrest (crest), "reset should clear the low-end crest");
+    }
+
+    std::printf ("[1b] stereo scope: correlation follows the channel coherence, level does not matter\n");
+    {
+        const auto& scope = proc.stereoScope();
+        runAudio (proc, 3.0, fs, 512, 0.5f, 1, 0.0f);
+        CHECK (scope.hasData());
+        std::printf("    independent channels: correlation %.2f\n", scope.correlation());
+        CHECK (std::abs (scope.correlation()) < 0.25f);
+        runAudio (proc, 3.0, fs, 512, 0.5f, 1, 1.0f);
+        CHECK (scope.correlation() > 0.99f);
+        runAudio (proc, 3.0, fs, 512, 0.0005f, 1, 1.0f); // 60 dB quieter
+        CHECK (scope.correlation() > 0.99f);
+        float l[64], r[64];
+        CHECK (scope.copyRecent (l, r, 64) == 64);
+        CHECK (std::abs (l[63] - r[63]) < 1.0e-6f);
+        proc.resetAnalyzer();
+        runAudio (proc, 0.1, fs, 512, 0.5f, 1);
+        settle();
     }
 
     std::printf ("[2] averaging parameter reaches the analyser setting\n");
@@ -183,16 +206,16 @@ int main (int argc, char** argv)
 
     std::printf ("[6] editor builds, paints and survives resizing\n");
     {
-        runAudio (proc, 14.0, fs, 512, 0.5f, 3); // so the screenshot shows a measured curve
+        runAudio (proc, 14.0, fs, 512, 0.5f, 3, 0.55f); // so the screenshot shows a measured curve and a plausible stereo image
         settle();
         std::unique_ptr<juce::AudioProcessorEditor> editor (proc.createEditor());
         CHECK (editor != nullptr);
         if (editor != nullptr)
         {
-            editor->setSize (1000, 560);
+            editor->setSize (1240, 580);
             pump (400); // let the 30 Hz timer pull data
             auto img = editor->createComponentSnapshot (editor->getLocalBounds(), true, 1.0f);
-            CHECK (img.isValid() && img.getWidth() == 1000);
+            CHECK (img.isValid() && img.getWidth() == 1240);
             if (argc > 1)
             {
                 juce::File png (argv[1]);
@@ -202,7 +225,7 @@ int main (int argc, char** argv)
                     fmt.writeImageToStream (img, *out);
                 std::printf ("    snapshot -> %s\n", png.getFullPathName().toRawUTF8());
             }
-            editor->setSize (720, 420);
+            editor->setSize (900, 440);
             editor->setSize (1900, 1100);
             pump (100);
         }

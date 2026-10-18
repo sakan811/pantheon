@@ -4,6 +4,7 @@ ThemisEditor::ThemisEditor (ThemisProcessor& p)
     : AudioProcessorEditor (&p),
       proc (p),
       view (p),
+      scopeView (p),
       targetBox (p.apvts, params::target, params::targetNames()),
       avgBox (p.apvts, params::avgTime, params::avgTimeNames),
       toleranceSlider (p.apvts, params::tolerance, "Tolerance")
@@ -11,6 +12,7 @@ ThemisEditor::ThemisEditor (ThemisProcessor& p)
     setLookAndFeel (&laf);
 
     addAndMakeVisible (view);
+    addAndMakeVisible (scopeView);
     for (auto* c : std::initializer_list<juce::Component*> { &targetBox, &avgBox, &learnButton, &saveButton, &loadButton, &resetButton,
                                                               &statusLabel, &toleranceSlider })
         addAndMakeVisible (c);
@@ -29,8 +31,8 @@ ThemisEditor::ThemisEditor (ThemisProcessor& p)
     setStatus ("Tip: use 'Learn from tracks...' to build a target from your own reference masters.", false);
 
     setResizable (true, true);
-    setResizeLimits (720, 420, 1900, 1100);
-    setSize (1000, 560);
+    setResizeLimits (900, 440, 1900, 1100);
+    setSize (1240, 580);
     startTimerHz (30);
 }
 
@@ -43,6 +45,7 @@ ThemisEditor::~ThemisEditor()
 void ThemisEditor::timerCallback()
 {
     view.update();
+    scopeView.update();
     if (statusTicks > 0 && --statusTicks == 0)
         statusLabel.setText ({}, juce::dontSendNotification);
 }
@@ -160,5 +163,7 @@ void ThemisEditor::resized()
     row2.removeFromLeft (12);
     statusLabel.setBounds (row2);
 
+    scopeView.setBounds (r.removeFromRight (270));
+    r.removeFromRight (8);
     view.setBounds (r);
 }

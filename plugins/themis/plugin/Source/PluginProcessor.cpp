@@ -31,6 +31,7 @@ void ThemisProcessor::prepareToPlay (double sr, int)
     stopAnalysis(); // prepare() must not overlap with pump()
     analyzer.prepare (sr);
     lowCrest.prepare (sr);
+    scope.prepare (sr);
     prepared = true;
     analysisThread = std::make_unique<AnalysisThread> (analyzer);
     analysisThread->startThread();
@@ -60,6 +61,7 @@ void ThemisProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
     analyzer.push (buffer.getReadPointer (0), buffer.getReadPointer (1), buffer.getNumSamples());
     lowCrest.setAveragingSeconds (avgSeconds);
     lowCrest.process (buffer.getReadPointer (0), buffer.getReadPointer (1), buffer.getNumSamples());
+    scope.push (buffer.getReadPointer (0), buffer.getReadPointer (1), buffer.getNumSamples());
 }
 
 juce::AudioProcessorEditor* ThemisProcessor::createEditor()

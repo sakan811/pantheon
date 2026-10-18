@@ -54,7 +54,14 @@ inline void normaliseAnchor (BandArray& db)
         v -= mean;
 }
 
-// Long-term constant-Q spectrum of a stereo signal (analysed as mid).
+// Long-term constant-Q spectrum of a stereo signal (analysed as mid), independent of loudness.
+//
+// Level independence: every analysed frame is normalised by its own total band energy before it enters the
+// average, so the result is the average spectral *shape*. Scaling the input by any gain, or having loud and
+// quiet passages in the same programme, does not move the curve (a loud chorus does not outweigh a quiet
+// verse). Frames that are silent, or far below the running level (fade tails, gaps, noise floor), are gated
+// out relative to that running level, never against a fixed dBFS threshold. The published curve is then
+// shifted so the anchor region averages 0 dB.
 //
 // Threading: the audio thread only calls push(), which copies the mid signal into a lock-free ring and
 // does no FFT work. A worker thread calls pump() every few milliseconds to run the analysis; UI threads
@@ -63,7 +70,8 @@ inline void normaliseAnchor (BandArray& db)
 class TonalAnalyzer
 {
 public:
-    static constexpr float kGateDb = -70.0f; // frames quieter than this (RMS) are ignored
+    static constexpr float kSilenceDb = -90.0f;      // frames below this RMS (dBFS) are digital silence / dither
+    static constexpr float kRelativeGateDb = -35.0f; // frames this far below the running mean power are ignored
 
     TonalAnalyzer() = default;
 
@@ -185,7 +193,8 @@ private:
     {
         int firstBin = 0, lastBin = -1; // inclusive range of FFT bins inside the band
         int interpLo = 0;               // for bands narrower than one bin: interpolate between bins
-        float interpFrac = 0.0f, binsWide = 0.0f;
+        float interpFrac = 0.0f;
+        float binsWide = 0.0f;          // true band width in bins (not the number of whole bins it happens to contain)
         bool valid = true;
     };
 
@@ -200,12 +209,12 @@ private:
             m.valid = lo < nyquist * 0.98;
             m.firstBin = static_cast<int> (std::ceil (lo / binHz));
             m.lastBin = std::min (static_cast<int> (std::ceil (hi / binHz)) - 1, fftSize / 2);
+            m.binsWide = static_cast<float> ((hi - lo) / binHz);
             if (m.lastBin < m.firstBin)
             {
                 const double pos = c / binHz;
                 m.interpLo = static_cast<int> (std::floor (pos));
                 m.interpFrac = static_cast<float> (pos - m.interpLo);
-                m.binsWide = static_cast<float> ((hi - lo) / binHz);
             }
             bandMap[static_cast<size_t> (b)] = m;
         }
@@ -213,7 +222,6 @@ private:
 
     void analyseFrame (uint64_t start)
     {
-        // Gate on RMS of the analysed segment.
         const size_t mask = static_cast<size_t> (ringSize - 1);
         const size_t s0 = static_cast<size_t> (start & mask);
         double energy = 0.0;
@@ -223,37 +231,61 @@ private:
             frame[static_cast<size_t> (i)] = v * window[static_cast<size_t> (i)];
             energy += static_cast<double> (v) * v;
         }
-        const float rmsDb = 10.0f * std::log10 (static_cast<float> (energy / fftSize) + 1.0e-20f);
-        if (rmsDb < kGateDb)
+        const double meanPower = energy / fftSize;
+        const float rmsDb = 10.0f * std::log10 (static_cast<float> (meanPower) + 1.0e-20f);
+        if (rmsDb < kSilenceDb)
+            return;
+
+        const float tau = avgSeconds.load (std::memory_order_relaxed);
+        const double hopSec = static_cast<double> (hop) / fs;
+        const double smoothing = tau <= 0.0f ? 0.0 : 1.0 - std::exp (-hopSec / tau);
+
+        // Running mean power (every non-silent frame feeds it, so it follows the programme down as well as up).
+        const bool gated = refFrames > 0 && meanPower < refPower * std::pow (10.0, kRelativeGateDb / 10.0);
+        ++refFrames;
+        refPower += std::max (smoothing, 1.0 / static_cast<double> (refFrames)) * (meanPower - refPower);
+        if (gated)
             return;
 
         fft->powerSpectrum (frame.data(), power.data(), powerNorm);
         const int half = fftSize / 2;
 
-        ++frameCount;
-        const double hopSec = static_cast<double> (hop) / fs;
-        const float tau = avgSeconds.load (std::memory_order_relaxed);
-        double alpha = tau <= 0.0f ? 0.0 : 1.0 - std::exp (-hopSec / tau);
-        alpha = std::max (alpha, 1.0 / static_cast<double> (frameCount)); // cumulative mean until EMA catches up
-
+        // Energy per band: the mean power over the bins the band covers, times the band's true width in bins.
+        std::array<double, BandGrid::kNum> e {};
+        double total = 0.0;
         for (int b = 0; b < BandGrid::kNum; ++b)
         {
             const auto& m = bandMap[static_cast<size_t> (b)];
-            double e = 0.0;
+            double v = 0.0;
             if (!m.valid)
-                e = 1.0e-20;
+                v = 1.0e-20;
             else if (m.lastBin >= m.firstBin)
             {
+                double sum = 0.0;
                 for (int k = m.firstBin; k <= m.lastBin; ++k)
-                    e += power[static_cast<size_t> (k)];
+                    sum += power[static_cast<size_t> (k)];
+                v = sum / (m.lastBin - m.firstBin + 1) * m.binsWide;
             }
             else
             {
                 const float p0 = power[static_cast<size_t> (m.interpLo)];
                 const float p1 = power[static_cast<size_t> (std::min (m.interpLo + 1, half))];
-                e = (p0 + (p1 - p0) * m.interpFrac) * m.binsWide;
+                v = (p0 + (p1 - p0) * m.interpFrac) * m.binsWide;
             }
-            avg[static_cast<size_t> (b)] += alpha * (e - avg[static_cast<size_t> (b)]);
+            e[static_cast<size_t> (b)] = v;
+            if (m.valid)
+                total += v;
+        }
+        if (total < 1.0e-20)
+            return;
+
+        ++frameCount;
+        const double alpha = std::max (smoothing, 1.0 / static_cast<double> (frameCount)); // cumulative mean until EMA catches up
+        const double invTotal = 1.0 / total;
+        for (size_t b = 0; b < e.size(); ++b)
+        {
+            const double v = bandMap[b].valid ? e[b] * invTotal : 1.0e-20; // this frame's spectral shape, level removed
+            avg[b] += alpha * (v - avg[b]);
         }
         publish();
     }
@@ -273,6 +305,8 @@ private:
     {
         avg.fill (0.0);
         frameCount = 0;
+        refFrames = 0;
+        refPower = 0.0;
         // Only audio pushed from now on counts. Frames end every `hop` samples once a full frame of new data exists.
         const uint64_t base = writeCount.load (std::memory_order_acquire);
         const uint64_t offset = static_cast<uint64_t> (hop - static_cast<int> (hopPhase * hop));
@@ -296,6 +330,8 @@ private:
     std::atomic<uint64_t> writeCount { 0 }; // total samples pushed since prepare(); the ring index is count & (ringSize-1)
     uint64_t nextFrameEnd = 0;              // worker-side: absolute sample index where the next frame ends
     int frameCount = 0;
+    int refFrames = 0;     // non-silent frames seen, for the running level
+    double refPower = 0.0; // running mean frame power, the reference for the relative gate
     double hopPhase = 0.0;
 
     std::atomic<float> avgSeconds { 30.0f };

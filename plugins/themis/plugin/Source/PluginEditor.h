@@ -1,6 +1,7 @@
 #pragma once
 
 #include "PluginProcessor.h"
+#include "StereoScopeView.h"
 #include "ThemisLookAndFeel.h"
 #include "TonalBalanceView.h"
 
@@ -76,6 +77,7 @@ private:
     ThemisLookAndFeel laf;
 
     TonalBalanceView view;
+    StereoScopeView scopeView;
 
     ui::Choice targetBox, avgBox;
     juce::TextButton learnButton { "Learn from tracks..." }, saveButton { "Save curve" }, loadButton { "Load curve" },

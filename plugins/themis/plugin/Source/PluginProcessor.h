@@ -5,6 +5,7 @@
 #include <juce_audio_formats/juce_audio_formats.h>
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <themis/LowCrestMeter.h>
+#include <themis/StereoScope.h>
 
 #include <atomic>
 #include <functional>
@@ -48,6 +49,7 @@ public:
     {
         analyzer.requestReset();
         lowCrest.requestReset();
+        scope.requestReset();
     }
 
     // Thread-safe read of the long-term spectrum. Returns false until enough audio has been analysed.
@@ -55,6 +57,9 @@ public:
 
     // Low-end (20-250 Hz) crest factor in dB. Returns false until enough audio has been measured.
     bool readLowCrest (float& outDb) const;
+
+    // Stereo image: raw L/R samples for the vectorscope and the smoothed phase correlation (-1..+1).
+    const themis::StereoScope& stereoScope() const { return scope; }
 
     // Target curves
     themis::TargetCurve activeTarget() const; // honours the "target" parameter
@@ -92,6 +97,7 @@ private:
 
     themis::TonalAnalyzer analyzer;
     themis::LowCrestMeter lowCrest;
+    themis::StereoScope scope;
     std::unique_ptr<AnalysisThread> analysisThread; // exists between prepareToPlay and releaseResources
     std::atomic<bool> prepared { false };
 

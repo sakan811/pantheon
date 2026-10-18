@@ -5,6 +5,7 @@
 #include <themis/Limiter.h>
 #include <themis/LowCrestMeter.h>
 #include <themis/Loudness.h>
+#include <themis/StereoScope.h>
 #include <themis/StereoTools.h>
 #include <themis/TargetCurve.h>
 #include <themis/TonalAnalyzer.h>
@@ -405,6 +406,144 @@ TEST (tonal_analyzer_pink_is_flat_white_tilts_3db_per_octave)
                 peak = i;
         CHECK (std::abs (BandGrid::centreHz (peak) - 1000.0) < 1000.0 * 0.12);
     }
+}
+
+static BandArray analyse (const std::vector<float>& x, double fs)
+{
+    BandArray out {};
+    CHECK (TonalAnalyzer::analyseOffline (x.data(), x.data(), x.size(), fs, out));
+    return out;
+}
+
+static std::vector<float> scaledToRmsDb (std::vector<float> x, double targetDb)
+{
+    const float g = static_cast<float> (std::pow (10.0, (targetDb - rmsDb (x, 0, x.size())) / 20.0));
+    for (auto& v : x)
+        v *= g;
+    return x;
+}
+
+TEST (tonal_analyzer_is_independent_of_level)
+{
+    const double fs = 48000;
+    const size_t n = static_cast<size_t> (fs * 20);
+    // Coloured material (white noise: +3 dB/oct on this grid) so the check is not satisfied by a flat curve.
+    const auto white = whiteNoise (n, 17);
+    const auto ref = analyse (white, fs);
+    for (double db : { -6.0, -30.0, -60.0, -80.0 })
+    {
+        const auto got = analyse (scaledToRmsDb (white, db), fs);
+        for (int i = 0; i <= BandGrid::indexForHz (16000.0); ++i)
+            CHECK_NEAR (got[static_cast<size_t> (i)], ref[static_cast<size_t> (i)], 0.01);
+    }
+}
+
+TEST (tonal_analyzer_weights_loud_and_quiet_passages_equally)
+{
+    const double fs = 48000;
+    const size_t half = static_cast<size_t> (fs * 12);
+    const auto loud = scaledToRmsDb (pinkNoise (half, 3), -18.0);
+    const auto white = whiteNoise (half, 5);
+
+    // pink then white, the white part 20 dB or 10 dB below the pink: the result is the same either way
+    auto programme = [&] (double whiteDb) {
+        auto x = loud;
+        const auto w = scaledToRmsDb (white, whiteDb);
+        x.insert (x.end(), w.begin(), w.end());
+        return analyse (x, fs);
+    };
+    const auto a = programme (-38.0), b = programme (-28.0);
+    for (int i = 4; i <= BandGrid::indexForHz (16000.0); ++i)
+        CHECK_NEAR (a[static_cast<size_t> (i)], b[static_cast<size_t> (i)], 0.3);
+
+    // and the quiet half really does count: halfway between the pink (flat) and white (+9 dB over 1k..8k) shapes
+    auto at = [] (const BandArray& x, double hz) { return x[static_cast<size_t> (std::lround (BandGrid::indexForHz (hz)))]; };
+    CHECK_NEAR (at (a, 8000) - at (a, 1000), 4.5, 1.5);
+}
+
+TEST (tonal_analyzer_gates_far_quieter_frames_relative_to_the_programme)
+{
+    const double fs = 48000;
+    const size_t half = static_cast<size_t> (fs * 12);
+    auto x = scaledToRmsDb (pinkNoise (half, 3), -20.0);
+    const auto hiss = scaledToRmsDb (whiteNoise (half, 5), -75.0); // 55 dB below the programme, still above digital silence
+    x.insert (x.end(), hiss.begin(), hiss.end());
+    const auto got = analyse (x, fs);
+    auto at = [&] (double hz) { return got[static_cast<size_t> (std::lround (BandGrid::indexForHz (hz)))]; };
+    CHECK_NEAR (at (8000) - at (1000), 0.0, 1.0); // would be ~4.5 dB if the hiss counted
+
+    // the same programme 40 dB lower is gated identically (a fixed dBFS gate would let the hiss in)
+    auto y = scaledToRmsDb (pinkNoise (half, 3), -60.0);
+    const auto hiss2 = scaledToRmsDb (whiteNoise (half, 5), -115.0);
+    y.insert (y.end(), hiss2.begin(), hiss2.end());
+    const auto got2 = analyse (y, fs);
+    for (int i = 0; i <= BandGrid::indexForHz (16000.0); ++i)
+        CHECK_NEAR (got2[static_cast<size_t> (i)], got[static_cast<size_t> (i)], 0.05);
+}
+
+TEST (tonal_analyzer_low_bands_are_accurate)
+{
+    // Pink noise is flat on this grid; the lowest bands span only a few FFT bins, so this catches bin-count jitter.
+    const double fs = 48000;
+    const auto out = analyse (pinkNoise (static_cast<size_t> (fs * 60), 31), fs);
+    for (int i = 0; i <= BandGrid::indexForHz (250.0); ++i)
+        CHECK_NEAR (out[static_cast<size_t> (i)], 0.0, 1.0);
+}
+
+TEST (stereo_scope_correlation_and_samples)
+{
+    const double fs = 48000;
+    const size_t n = static_cast<size_t> (fs * 3);
+    const auto a = whiteNoise (n, 1), b = whiteNoise (n, 2);
+    auto feed = [&] (StereoScope& s, const std::vector<float>& l, const std::vector<float>& r) {
+        for (size_t pos = 0; pos < n; pos += 480)
+            s.push (l.data() + pos, r.data() + pos, static_cast<int>(std::min<size_t> (480, n - pos)));
+    };
+    std::vector<float> neg (n);
+    for (size_t i = 0; i < n; ++i)
+        neg[i] = -a[i];
+
+    StereoScope s;
+    s.prepare (fs);
+    CHECK (!s.hasData());
+    feed (s, a, a);
+    CHECK (s.hasData());
+    CHECK_NEAR (s.correlation(), 1.0, 5e-3);
+    feed (s, a, neg);
+    CHECK_NEAR (s.correlation(), -1.0, 5e-3);
+    feed (s, a, b);
+    CHECK_NEAR (s.correlation(), 0.0, 0.15);
+
+    // silence keeps the last value instead of dividing by zero
+    const std::vector<float> zero (n, 0.0f);
+    const float before = s.correlation();
+    feed (s, zero, zero);
+    CHECK_NEAR (s.correlation(), before, 1e-3);
+
+    s.requestReset();
+    float l1[4] = { 1, 2, 3, 4 }, r1[4] = { -1, -2, -3, -4 };
+    s.push (l1, r1, 4);
+    CHECK (!s.hasData() || s.correlation() < -0.9f); // reset applied, only the new block counts
+
+    // newest samples, oldest first, and only as many as exist since prepare
+    StereoScope t;
+    t.prepare (fs);
+    float lo[8] = {}, ro[8] = {};
+    CHECK (t.copyRecent (lo, ro, 8) == 0);
+    t.push (l1, r1, 4);
+    CHECK (t.copyRecent (lo, ro, 8) == 4);
+    CHECK (lo[0] == 1.0f && lo[3] == 4.0f && ro[3] == -4.0f);
+    CHECK (t.copyRecent (lo, ro, 2) == 2);
+    CHECK (lo[0] == 3.0f && lo[1] == 4.0f);
+
+    float x = 0, y = 0;
+    StereoScope::toXY (1.0f, 1.0f, x, y); // mono: vertical
+    CHECK_NEAR (x, 0.0, 1e-6);
+    CHECK (y > 1.4f);
+    StereoScope::toXY (1.0f, 0.0f, x, y); // left only: up-left
+    CHECK (x < 0.0f && y > 0.0f);
+    StereoScope::toXY (0.0f, 1.0f, x, y);
+    CHECK (x > 0.0f && y > 0.0f);
 }
 
 TEST (tonal_analyzer_cost_per_frame)
