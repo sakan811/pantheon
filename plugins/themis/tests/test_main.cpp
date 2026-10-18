@@ -617,6 +617,22 @@ TEST (target_curve_json_roundtrip_and_tracks)
     const auto avg = TargetCurve::fromTracks ("two", { a, b });
     CHECK_NEAR (avg.medianDb[30], 0.0, 0.01);
     CHECK (avg.halfWidthDb[30] >= 1.5f);
+
+    // A low-sample-rate reference has no data above its Nyquist: that must not leak into the curve.
+    BandArray lowRate {};
+    for (size_t i = 0; i < lowRate.size(); ++i)
+        lowRate[i] = i < 56 ? 3.0f : -195.0f;
+    const auto lr = TargetCurve::fromTracks ("lowrate", { lowRate });
+    for (size_t i = 0; i < lr.medianDb.size(); ++i)
+        CHECK_NEAR (lr.medianDb[i], 0.0, 0.01); // flat input, extended flat, normalised to 0
+    // Mixed with a full-bandwidth track, the empty bands take their statistics from that track alone.
+    BandArray full {};
+    full.fill (3.0f);
+    full[58] = 9.0f;
+    const auto mixed = TargetCurve::fromTracks ("mixed", { lowRate, full }, 1.5f, 2.0f);
+    for (size_t i = 0; i < mixed.medianDb.size(); ++i)
+        CHECK (mixed.medianDb[i] > -10.0f);
+    CHECK (mixed.medianDb[59] > mixed.medianDb[40]);
 }
 
 TEST (eq_fit_reduces_error)

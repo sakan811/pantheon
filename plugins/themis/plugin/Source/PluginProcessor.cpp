@@ -88,17 +88,13 @@ void ThemisProcessor::setStateInformation (const void* data, int sizeInBytes)
     const auto tree = juce::ValueTree::fromXml (*xml);
     apvts.replaceState (tree);
 
-    const auto json = tree.getProperty ("customCurve").toString();
-    if (json.isNotEmpty())
-    {
-        themis::TargetCurve c;
-        if (themis::TargetCurve::fromJson (json.toStdString(), c))
-        {
-            const juce::ScopedLock sl (curveLock);
-            customCurve = c;
-            customCurveValid = true;
-        }
-    }
+    // The loaded state replaces the custom curve; one without a (valid) curve must not keep the previous one.
+    themis::TargetCurve c;
+    const bool valid = themis::TargetCurve::fromJson (tree.getProperty ("customCurve").toString().toStdString(), c);
+    const juce::ScopedLock sl (curveLock);
+    customCurveValid = valid;
+    if (valid)
+        customCurve = c;
 }
 
 // ---- analysis / targets -----------------------------------------------------------------------

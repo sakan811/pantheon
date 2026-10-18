@@ -37,6 +37,10 @@ struct BandGrid
 
 using BandArray = std::array<float, BandGrid::kNum>;
 
+// Analysed bands at or below this level (dB, after anchor normalisation) carry no information: they lie
+// above the Nyquist frequency of the analysed signal (published as about -200 dB) or are digital silence.
+inline constexpr float kNoDataDb = -150.0f;
+
 // Shifts a dB curve so its mean across the anchor region is 0.
 inline void normaliseAnchor (BandArray& db)
 {

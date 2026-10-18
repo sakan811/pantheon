@@ -93,7 +93,7 @@ private:
     themis::TonalAnalyzer analyzer;
     themis::LowCrestMeter lowCrest;
     std::unique_ptr<AnalysisThread> analysisThread; // exists between prepareToPlay and releaseResources
-    bool prepared = false;
+    std::atomic<bool> prepared { false };
 
     mutable juce::CriticalSection curveLock;
     themis::TargetCurve customCurve;

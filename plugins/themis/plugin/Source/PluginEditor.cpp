@@ -84,7 +84,7 @@ void ThemisEditor::saveCurve()
 {
     chooser = std::make_unique<juce::FileChooser> ("Save the active target curve",
                                                    juce::File::getSpecialLocation (juce::File::userDocumentsDirectory)
-                                                       .getChildFile (juce::String (proc.activeTarget().name) + ".themiscurve"),
+                                                       .getChildFile (juce::File::createLegalFileName (juce::String (proc.activeTarget().name)) + ".themiscurve"),
                                                    "*.themiscurve");
     const auto dialogFlags = juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles
                        | juce::FileBrowserComponent::warnAboutOverwriting;
@@ -94,7 +94,8 @@ void ThemisEditor::saveCurve()
         auto file = fc.getResult();
         if (file == juce::File())
             return;
-        file = file.withFileExtension ("themiscurve");
+        if (!file.hasFileExtension ("themiscurve")) // append: withFileExtension would cut "Mix 1.5" down to "Mix 1"
+            file = file.getSiblingFile (file.getFileName() + ".themiscurve");
         if (file.replaceWithText (juce::String (safe->proc.activeTarget().toJson())))
             safe->setStatus ("Saved " + file.getFileName(), false);
         else

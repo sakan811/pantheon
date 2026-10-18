@@ -4,6 +4,7 @@
 
 #include <cstdlib>
 #include <cstring>
+#include <locale>
 #include <sstream>
 #include <string>
 #include <utility>
@@ -60,22 +61,48 @@ struct TargetCurve
         c.name = std::move (name);
         if (tracks.empty())
             return c;
-        const double n = static_cast<double> (tracks.size());
+        // Bands a track has no data for (above its Nyquist) are left out of that band's statistics, so a
+        // low-sample-rate file can't drag the curve down.
+        std::array<bool, BandGrid::kNum> hasData {};
         for (int i = 0; i < BandGrid::kNum; ++i)
         {
             const size_t s = static_cast<size_t> (i);
             double mean = 0.0;
+            int n = 0;
             for (const auto& t : tracks)
-                mean += t[s];
+                if (t[s] > kNoDataDb)
+                {
+                    mean += t[s];
+                    ++n;
+                }
+            if (n == 0)
+                continue;
             mean /= n;
             double var = 0.0;
             for (const auto& t : tracks)
-                var += (t[s] - mean) * (t[s] - mean);
-            const double sd = tracks.size() > 1 ? std::sqrt (var / (n - 1.0)) : 0.0;
+                if (t[s] > kNoDataDb)
+                    var += (t[s] - mean) * (t[s] - mean);
+            const double sd = n > 1 ? std::sqrt (var / (n - 1.0)) : 0.0;
             c.medianDb[s] = static_cast<float> (mean);
-            c.halfWidthDb[s] = tracks.size() > 1 ? std::max (minWidthDb, static_cast<float> (sd * 1.25))
-                                                 : singleTrackWidthDb;
+            c.halfWidthDb[s] = n > 1 ? std::max (minWidthDb, static_cast<float> (sd * 1.25)) : singleTrackWidthDb;
+            hasData[s] = true;
         }
+        // No track reaches these bands: hold the nearest band that has data (flat extension) instead of
+        // inventing a -200 dB wall that would also leak into the smoothing below.
+        for (int i = 1; i < BandGrid::kNum; ++i)
+            if (!hasData[static_cast<size_t> (i)] && hasData[static_cast<size_t> (i - 1)])
+            {
+                c.medianDb[static_cast<size_t> (i)] = c.medianDb[static_cast<size_t> (i - 1)];
+                c.halfWidthDb[static_cast<size_t> (i)] = c.halfWidthDb[static_cast<size_t> (i - 1)];
+                hasData[static_cast<size_t> (i)] = true;
+            }
+        for (int i = BandGrid::kNum - 2; i >= 0; --i)
+            if (!hasData[static_cast<size_t> (i)] && hasData[static_cast<size_t> (i + 1)])
+            {
+                c.medianDb[static_cast<size_t> (i)] = c.medianDb[static_cast<size_t> (i + 1)];
+                c.halfWidthDb[static_cast<size_t> (i)] = c.halfWidthDb[static_cast<size_t> (i + 1)];
+                hasData[static_cast<size_t> (i)] = true;
+            }
         // A single track is noisy at fine resolution; smooth over +/- 1/3 octave.
         smooth (c.medianDb, 2);
         smooth (c.halfWidthDb, 2);
@@ -158,19 +185,21 @@ private:
         const auto k = json.find (key);
         if (k == std::string::npos)
             return false;
-        const char* p = json.c_str() + k + std::strlen (key);
+        // Classic locale: strtod would follow the host's C locale and reject "1.5" under a comma-decimal one.
+        std::istringstream in (json.substr (k + std::strlen (key)));
+        in.imbue (std::locale::classic());
         for (size_t i = 0; i < dst.size(); ++i)
         {
-            char* end = nullptr;
-            const double v = std::strtod (p, &end);
-            if (end == p || !std::isfinite (v))
+            double v = 0.0;
+            if (!(in >> v) || !std::isfinite (v))
                 return false;
             dst[i] = static_cast<float> (v);
-            p = end;
-            while (*p == ',' || *p == ' ')
-                ++p;
+            in >> std::ws;
+            if (in.peek() == ',')
+                in.get();
         }
-        return *p == ']';
+        in >> std::ws;
+        return in.peek() == ']';
     }
 
     static std::vector<TargetCurve> makeBuiltIns()
