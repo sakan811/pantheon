@@ -46,6 +46,10 @@ public:
         pendingCount = 0;
         tick = 0;
         switchTimer = 0.0f;
+        ringCount = 0;
+        centreCount = 0;
+        centreSpeed = 0.0f;
+        confirmedTime = 0.0f;
         resetVibrato (0.0f);
     }
 
@@ -112,18 +116,25 @@ public:
             center = x;
             target = nearestAllowed (x / 100.0f, p.noteMask);
             switchTimer = 0.0f;
+            ringCount = 0;
+            centreCount = 0;
+            centreSpeed = 0.0f;
+            confirmedTime = 0.0f;
+            pushPitch (x);
             resetVibrato (x);
         }
         else
         {
+            pushPitch (x);
             trackVibrato (x);
 
             if (vibrato)
             {
-                // Vibrato: the centre is the middle of the swings, which does not depend on where
-                // in the cycle we are. The fast "follow the voice" shortcuts below would just
+                // Vibrato: the centre is the mean over one whole cycle, which does not depend on
+                // where in the cycle we are. The fast "follow the voice" shortcuts below would just
                 // chase the oscillation, so they are off.
-                center += (1.0f - std::exp (-dt / 0.05f)) * (vibCentre - center);
+                vibCentre = cycleMean();
+                center += (1.0f - std::exp (-dt / 0.03f)) * (vibCentre - center);
             }
             else
             {
@@ -138,15 +149,27 @@ public:
             }
         }
 
+        // A slowly wandering pitch (drift, a note sagging or creeping) is not a new note: the further
+        // it creeps past the halfway point the more it takes to give up the current target. A fast
+        // move still switches almost at once.
+        // Only a target the voice has actually sat on is held this way: while a note is still
+        // settling (a scoop, a late-starting vibrato) the target is free to follow the voice.
+        updateCentreSpeed();
+        if (std::fabs (center - target * 100.0f) < 40.0f)
+            confirmedTime += dt;
+        const float slow = (1.0f - std::clamp ((centreSpeed - 70.0f) / 130.0f, 0.0f, 1.0f)) * std::clamp ((confirmedTime - 0.15f) / 0.25f, 0.0f, 1.0f);
+        const float hysteresis = (vibrato ? 0.25f : 0.10f) + slow * 0.30f;
+
         // During vibrato the note only changes once the centre has clearly and durably moved on:
         // a swing that straddles a note boundary must not make the target flip back and forth.
-        const float candidate = chooseTarget (center / 100.0f, p.noteMask, vibrato ? 0.25f : 0.10f);
+        const float candidate = chooseTarget (center / 100.0f, p.noteMask, hysteresis);
         if (candidate == target)
             switchTimer = 0.0f;
         else if (! vibrato || ! allowed ((int) std::lround (target), p.noteMask))
         {
             target = candidate;
             switchTimer = 0.0f;
+            confirmedTime = 0.0f;
         }
         else
         {
@@ -155,6 +178,7 @@ public:
             {
                 target = candidate;
                 switchTimer = 0.0f;
+                confirmedTime = 0.0f;
             }
         }
 
@@ -175,6 +199,7 @@ public:
     }
 
     float currentCorrectionCents() const { return cs; }
+    float centreCents() const { return center; }
 
 private:
     static bool allowed (int note, uint16_t mask)
@@ -265,26 +290,75 @@ private:
         ext[extCount++] = { v, t };
 
         vibrato = false;
-        if (extCount < 4)
+        if (extCount < 3)
             return;
 
-        float sMin = 1e9f, sMax = 0.0f, hMin = 1e9f, hMax = 0.0f;
-        for (int i = 1; i < 4; ++i)
+        // The last four extrema (three swings) make a vibrato; a clearly pronounced pair of swings
+        // (up and back down, or the reverse) is already enough for a big one, which would otherwise
+        // be taken for a run of different notes while it builds up.
+        for (int n = 4; n >= 3 && ! vibrato; --n)
         {
-            const float s = std::fabs (ext[i].v - ext[i - 1].v);
-            const float h = (float) (ext[i].tick - ext[i - 1].tick) * dt;
-            sMin = std::min (sMin, s);
-            sMax = std::max (sMax, s);
-            hMin = std::min (hMin, h);
-            hMax = std::max (hMax, h);
+            if (extCount < n)
+                continue;
+            const bool full = n == 4;
+            const Extremum* e = ext + (extCount - n);
+            float sMin = 1e9f, sMax = 0.0f, hMin = 1e9f, hMax = 0.0f, hSum = 0.0f;
+            for (int i = 1; i < n; ++i)
+            {
+                const float sw = std::fabs (e[i].v - e[i - 1].v);
+                const float h = (float) (e[i].tick - e[i - 1].tick) * dt;
+                sMin = std::min (sMin, sw);
+                sMax = std::max (sMax, sw);
+                hMin = std::min (hMin, h);
+                hMax = std::max (hMax, h);
+                hSum += h;
+            }
+            // Full: 1.3 - 12 Hz, up to 6 semitones peak to peak. A drift under the vibrato makes the
+            // up and down swings differ, so the swing sizes are only loosely matched.
+            const bool ok = full ? (hMin >= 0.04f && hMax <= 0.38f && sMin >= 24.0f && sMax <= 600.0f && sMax <= 3.0f * sMin && hMax <= 2.0f * hMin)
+                                 : (hMin >= 0.05f && hMax <= 0.30f && sMin >= 60.0f && sMax <= 600.0f && sMax <= 1.8f * sMin && hMax <= 1.6f * hMin);
+            if (ok)
+            {
+                vibrato = true;
+                vibSwingMax = sMax;
+                vibHalfPeriod = hSum / (float) (n - 1);
+            }
         }
-        if (hMin >= 0.05f && hMax <= 0.20f && sMin >= 24.0f && sMax <= 220.0f && sMax <= 2.2f * sMin && hMax <= 1.8f * hMin)
+    }
+
+    // ---- recent pitch, for the centre of a vibrato ----
+    static constexpr int kRing = 256;
+
+    void pushPitch (float x)
+    {
+        pitchRing[(size_t) (ringPos & (kRing - 1))] = x;
+        ++ringPos;
+        ringCount = std::min (ringCount + 1, kRing);
+    }
+
+    // Mean pitch over the most recent whole vibrato cycle: the oscillation cancels out.
+    float cycleMean() const
+    {
+        const int n = std::clamp ((int) std::lround (2.0f * vibHalfPeriod / dt), 8, std::min (ringCount, kRing));
+        double sum = 0.0;
+        for (int i = 1; i <= n; ++i)
+            sum += pitchRing[(size_t) ((ringPos - i) & (kRing - 1))];
+        return (float) (sum / n);
+    }
+
+    // How fast the centre is moving (cents per second), measured over the last 0.2 s.
+    void updateCentreSpeed()
+    {
+        constexpr int kSpan = 50; // hops
+        centreRing[(size_t) (centreCount & 63)] = center;
+        ++centreCount;
+        if (centreCount <= kSpan)
         {
-            vibrato = true;
-            vibSwingMax = sMax;
-            vibHalfPeriod = 0.5f * (hMin + hMax);
-            vibCentre = 0.25f * (ext[1].v + 2.0f * ext[2].v + ext[3].v);
+            centreSpeed = 0.0f;
+            return;
         }
+        const float older = centreRing[(size_t) ((centreCount - 1 - kSpan) & 63)];
+        centreSpeed = std::fabs (center - older) / ((float) kSpan * dt);
     }
 
     void trackVibrato (float x)
@@ -340,6 +414,13 @@ private:
     int medCount = 0;
     float lastX = 0.0f, pendingX = 0.0f;
     int pendingCount = 0;
+
+    float pitchRing[kRing] = {};
+    int64_t ringPos = 0;
+    int ringCount = 0;
+    float centreRing[64] = {};
+    int centreCount = 0;
+    float centreSpeed = 0.0f, confirmedTime = 0.0f;
 
     int64_t tick = 0;
     float switchTimer = 0.0f;

@@ -1,10 +1,14 @@
 // Developer tool (not part of the shipped plug-in):
 //   HarmoniaDevTool selftest              drive the real HarmoniaProcessor with a synthetic vocal
-//   HarmoniaDevTool snapshot out.png      render the editor (after feeding it a phrase) to a PNG
+//   HarmoniaDevTool snapshot out.png [seconds [in.wav start]]
+//                                         render the editor (after feeding it a phrase, or `seconds` of a WAV from `start`) to a PNG
+//   HarmoniaDevTool process in.wav out.wav [key 0-11] [scale index] [speed ms] [natural %] [strength %]
+//                                         run a WAV file through the real HarmoniaProcessor (delay-compensated)
 
 #include "../Source/PluginEditor.h"
 #include "../Source/PluginProcessor.h"
 #include "TestSignals.h"
+#include "WavIO.h"
 
 #include <cstdio>
 
@@ -139,7 +143,7 @@ static int selftest()
     return failures == 0 ? 0 : 1;
 }
 
-static int snapshot (const char* path, double feedSeconds)
+static int snapshot (const char* path, double feedSeconds, const char* wavPath = nullptr, double wavStart = 0.0)
 {
     constexpr double fs = 48000.0;
     HarmoniaProcessor proc;
@@ -160,6 +164,18 @@ static int snapshot (const char* path, double feedSeconds)
         return testsig::midiToHz (notes[k] + 0.22 * std::sin (2.0 * testsig::kPi * 5.6 * t));
     });
     in.resize ((size_t) (feedSeconds * fs));
+    if (wavPath)
+    {
+        wavio::Wav w;
+        if (! wavio::read (wavPath, w) || w.sampleRate != (int) fs)
+        {
+            std::fprintf (stderr, "need a %d Hz WAV: %s\n", (int) fs, wavPath);
+            return 1;
+        }
+        const size_t from = (size_t) (wavStart * fs);
+        for (size_t i = 0; i < in.size() && from + i < w.data[0].size(); ++i)
+            in[i] = w.data[0][from + i];
+    }
     run (proc, in);
 
     auto* editor = new HarmoniaEditor (proc);
@@ -175,13 +191,72 @@ static int snapshot (const char* path, double feedSeconds)
     return 0;
 }
 
+// Streams a WAV file through the processor in host-sized blocks, the way a DAW would, and writes the
+// result shifted back by the reported latency so that it lines up with the input.
+static int processFile (int argc, char** argv)
+{
+    wavio::Wav in;
+    if (! wavio::read (argv[2], in))
+    {
+        std::fprintf (stderr, "cannot read %s\n", argv[2]);
+        return 1;
+    }
+    const int nch = std::min (in.channels, 2);
+    const size_t frames = in.data[0].size();
+
+    HarmoniaProcessor proc;
+    proc.setPlayConfigDetails (nch, nch, (double) in.sampleRate, 512);
+    proc.prepareToPlay ((double) in.sampleRate, 512);
+    setParam (proc, ids::bypass, 0.0f);
+    setParam (proc, ids::key, argc > 4 ? (float) std::atof (argv[4]) : 0.0f);
+    setParam (proc, ids::scale, argc > 5 ? (float) std::atof (argv[5]) : (float) harmonia::kChromaticScale);
+    if (argc > 6)
+        setParam (proc, ids::speed, (float) std::atof (argv[6]));
+    if (argc > 7)
+        setParam (proc, ids::natural, (float) std::atof (argv[7]));
+    if (argc > 8)
+        setParam (proc, ids::strength, (float) std::atof (argv[8]));
+
+    const int latency = proc.getLatencySamples();
+    const size_t total = frames + (size_t) latency;
+    wavio::Wav out;
+    out.sampleRate = in.sampleRate;
+    out.channels = nch;
+    out.data.assign ((size_t) nch, std::vector<float> (frames));
+
+    juce::AudioBuffer<float> buf (nch, 512);
+    juce::MidiBuffer midi;
+    for (size_t pos = 0; pos < total; pos += 512)
+    {
+        const int n = (int) std::min<size_t> (512, total - pos);
+        buf.setSize (nch, n, false, false, true);
+        for (int c = 0; c < nch; ++c)
+            for (int i = 0; i < n; ++i)
+                buf.setSample (c, i, pos + (size_t) i < frames ? in.data[(size_t) c][pos + (size_t) i] : 0.0f);
+        proc.processBlock (buf, midi);
+        for (int c = 0; c < nch; ++c)
+            for (int i = 0; i < n; ++i)
+            {
+                const size_t at = pos + (size_t) i;
+                if (at >= (size_t) latency)
+                    out.data[(size_t) c][at - (size_t) latency] = buf.getSample (c, i);
+            }
+    }
+    if (! wavio::write (argv[3], out))
+        return 1;
+    std::printf ("processed %zu frames @ %d Hz through HarmoniaProcessor (latency %d samples)\n", frames, in.sampleRate, latency);
+    return 0;
+}
+
 int main (int argc, char** argv)
 {
     juce::ScopedJuceInitialiser_GUI init;
     if (argc >= 2 && std::string (argv[1]) == "selftest")
         return selftest();
     if (argc >= 3 && std::string (argv[1]) == "snapshot")
-        return snapshot (argv[2], argc >= 4 ? std::atof (argv[3]) : 4.2);
-    std::printf ("usage: HarmoniaDevTool selftest | snapshot out.png\n");
+        return snapshot (argv[2], argc >= 4 ? std::atof (argv[3]) : 4.2, argc >= 6 ? argv[4] : nullptr, argc >= 6 ? std::atof (argv[5]) : 0.0);
+    if (argc >= 4 && std::string (argv[1]) == "process")
+        return processFile (argc, argv);
+    std::printf ("usage: HarmoniaDevTool selftest | snapshot out.png | process in.wav out.wav [key scale speed natural strength]\n");
     return 1;
 }

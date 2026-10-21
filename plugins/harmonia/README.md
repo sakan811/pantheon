@@ -45,10 +45,16 @@ allowed notes.
 `detect (YIN) → pick target note + smooth the correction → PSOLA re-synthesis`
 
 * **Pitch detection** ([PitchDetector.h](Source/dsp/PitchDetector.h)): YIN at ~24 kHz, refined at full rate; octave guard for
-  strong harmonics; sub-cent precision.
-* **Correction** ([PitchCorrector.h](Source/dsp/PitchCorrector.h)): the target note comes from a slow-moving "centre" of the sung
-  note (so vibrato never makes it flip notes) that speeds up when the voice really moves. The correction is smoothed
-  by *Speed*; *Natural* decides how much of the singer's own deviation is kept.
+  strong harmonics; sub-cent precision. The pitch is measured on a low-passed copy of the voice (cutoff ~4x the pitch), so
+  breath, sibilance and the non-harmonic residue left in AI-separated stems or by bleed cannot pull the detector onto a
+  wrong period. A detection more than an octave away from where the voice just was is treated as a glitch (that stretch
+  passes through untouched) unless it persists.
+* **Correction** ([PitchCorrector.h](Source/dsp/PitchCorrector.h)): the target note comes from a "centre" of the sung note.
+  Under vibrato (1.3-12 Hz, up to 6 semitones peak to peak, recognised after two big swings or three ordinary ones) the
+  centre is the mean over one whole vibrato cycle, so even a +-1.5 semitone vibrato stays on one note. Without vibrato it
+  follows the voice quickly, so real note changes are caught at once. A note the voice has settled on is *held*: slow drift
+  (< ~70 cents/s) or a sag has to travel well past the halfway point before it counts as the next note. The correction
+  is smoothed by *Speed*; *Natural* decides how much of the singer's own deviation is kept.
 * **Re-synthesis** ([AutoTuneEngine.h](Source/dsp/AutoTuneEngine.h)): pitch-synchronous overlap-add (PSOLA) with sub-sample
   analysis marks. Grains are re-spaced, not resampled, so formants (the voice colour) stay where they were.
   Consonants and breaths (unvoiced) pass through untouched.
@@ -60,7 +66,7 @@ Requires CMake and Xcode (clang + macOS SDK). JUCE 8.0.12 is fetched automatical
 
 ```sh
 scripts/build.sh            # configure, build VST3 + AU + Standalone, install, ad-hoc sign
-scripts/build_tests.sh      # offline DSP accuracy tests (no JUCE) + builds build-tools/tune_wav
+scripts/build_tests.sh      # offline DSP accuracy tests (no JUCE) + builds build-tools/{tune_wav,pitch_track,stress_corrector}
 ```
 
 > `scripts/build.sh` drives Xcode's clang/SDK through Unix Makefiles on purpose: on this machine `xcodebuild`
@@ -70,8 +76,17 @@ scripts/build_tests.sh      # offline DSP accuracy tests (no JUCE) + builds buil
 Extra tools:
 
 ```sh
-# tune a WAV file offline
-build-tools/tune_wav in.wav out.wav --key A --scale minor --speed 40 --natural 0.7
+# tune a WAV file offline (--dump writes a per-hop CSV: sung / corrected / target pitch)
+build-tools/tune_wav in.wav out.wav --key A --scale minor --speed 40 --natural 0.7 --dump hops.csv
+
+# independent pitch track (t, midi every 5 ms) of any WAV, e.g. to compare input and output
+build-tools/pitch_track in.wav track.csv
+
+# synthetic stress scenarios for the corrector: huge vibrato, drift, sagging notes (--csv dir writes the contours)
+build-tools/stress_corrector
+
+# run a WAV through the real plug-in processor (bit-identical to tune_wav at equal settings)
+build/HarmoniaDevTool_artefacts/Release/HarmoniaDevTool process in.wav out.wav 0 0
 
 # headless processor self-test and editor screenshot
 cmake --build build --target HarmoniaDevTool

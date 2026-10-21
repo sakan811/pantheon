@@ -1,6 +1,7 @@
 // Offline command-line front end for the Harmonia engine: tune a WAV file.
 //   tune_wav in.wav out.wav [--key C] [--scale major|minor|chromatic|...] [--speed ms]
 //            [--natural 0..1] [--strength 0..1] [--formant semitones] [--range low|mid|high|auto]
+//            [--dump hops.csv]
 // Prints a pitch report; the output is delay-compensated so it lines up with the input.
 
 #include "../Source/dsp/AutoTuneEngine.h"
@@ -29,6 +30,7 @@ int main (int argc, char** argv)
 
     EngineParams p;
     int root = 0, scale = 0;
+    std::string dumpPath;
     for (int i = 3; i + 1 < argc; i += 2)
     {
         const std::string k = argv[i], v = argv[i + 1];
@@ -52,6 +54,8 @@ int main (int argc, char** argv)
             p.corrector.strength = (float) std::atof (v.c_str());
         else if (k == "--formant")
             p.formantSemitones = (float) std::atof (v.c_str());
+        else if (k == "--dump")
+            dumpPath = v;
         else if (k == "--range")
         {
             for (int n = 0; n < kNumVoiceRanges; ++n)
@@ -87,12 +91,24 @@ int main (int argc, char** argv)
         work[(size_t) c].resize (frames + (size_t) lat, 0.0f); // flush the look-ahead
     }
     const size_t total = frames + (size_t) lat;
+    // Per-hop trace of what the corrector saw and decided (the engine keeps only the latest ~1000 hops).
+    FILE* dump = dumpPath.empty() ? nullptr : std::fopen (dumpPath.c_str(), "w");
+    if (dump)
+        std::fprintf (dump, "t,in,out,target,voiced\n");
+    int dumped = eng.historyWriteIndex();
     for (size_t pos = 0; pos < total; pos += 512)
     {
         const int n = (int) std::min<size_t> (512, total - pos);
         float* ch[2] = { work[0].data() + pos, nch > 1 ? work[1].data() + pos : nullptr };
         eng.process (ch, nch, n);
+        for (const int end = eng.historyWriteIndex(); dump && dumped < end; ++dumped)
+        {
+            const auto h = eng.historyAt (dumped);
+            std::fprintf (dump, "%.4f,%.3f,%.3f,%.3f,%d\n", dumped / eng.hopRateHz(), h.inMidi, h.outMidi, h.targetMidi, (int) h.voiced);
+        }
     }
+    if (dump)
+        std::fclose (dump);
     for (int c = 0; c < nch; ++c)
         std::copy (work[(size_t) c].begin() + lat, work[(size_t) c].begin() + lat + (long) frames, out.data[(size_t) c].begin());
 

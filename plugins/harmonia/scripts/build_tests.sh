@@ -7,7 +7,7 @@ set -e
 cd "$(dirname "$0")/.."
 source scripts/toolchain.sh
 mkdir -p build-tools
-for tool in tune_wav dsp_test; do
+for tool in tune_wav dsp_test pitch_track stress_corrector; do
     "$CXX" -isysroot "$SDK" -std=c++17 -O2 -Wall -Wextra "Tests/$tool.cpp" -o "build-tools/$tool"
 done
 ./build-tools/dsp_test

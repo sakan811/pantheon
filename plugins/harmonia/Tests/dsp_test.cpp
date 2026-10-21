@@ -192,6 +192,56 @@ int main()
             check (sm.stddev > 0.8 * sIn.stddev && sm.stddev < 1.25 * sIn.stddev, "engine: vibrato depth kept (out/in)", sm.stddev / sIn.stddev);
         }
 
+        // Huge vibrato: a swing of more than a semitone either side must still be one note.
+        {
+            struct Wide { const char* name; uint16_t mask; double centre, depth, rate; };
+            const Wide wides[] = {
+                { "chromatic, +-100c @5Hz, 25c sharp of C4", chromatic, 60.25, 1.00, 5.0 },
+                { "chromatic, +-150c @4.5Hz, 20c flat of E4", chromatic, 63.80, 1.50, 4.5 },
+                { "chromatic, +-80c @2.5Hz (slow), 10c sharp of D4", chromatic, 62.10, 0.80, 2.5 },
+                { "C major, +-120c @5.5Hz around the E4/F4 boundary", 0x0AB5, 64.50, 1.20, 5.5 },
+            };
+            for (auto& w : wides)
+            {
+                harmonia::CorrectorParams cp;
+                cp.noteMask = w.mask;
+                cp.retuneMs = 40.0f;
+                cp.natural = 0.7f;
+                auto contour = [&] (double t) {
+                    const double rise = std::clamp (t / 0.5, 0.0, 1.0); // the vibrato grows in
+                    return w.centre + rise * w.depth * std::sin (2.0 * kPi * w.rate * t);
+                };
+                std::vector<double> targets;
+                const auto r = drive (contour, 5.0, cp, 1.5, &targets);
+                char label[128];
+                std::snprintf (label, sizeof label, "%s: target flips", w.name);
+                check (r.flips == 0, label, r.flips);
+                std::snprintf (label, sizeof label, "%s: output centred on the note", w.name);
+                const double note = targets.back();
+                check (std::fabs (r.outMean - note * 100.0) < 12.0, label, r.outMean - note * 100.0, "cents");
+            }
+        }
+
+        // Drift: a held note that creeps away slowly is not a new note.
+        for (double vib : { 0.0, 0.25 })
+        {
+            harmonia::CorrectorParams cp;
+            cp.retuneMs = 40.0f;
+            cp.natural = 0.7f;
+            auto contour = [vib] (double t) { return 60.10 + 0.30 * t + vib * std::min (1.0, t) * std::sin (2.0 * kPi * 5.5 * t); };
+            std::vector<double> targets;
+            drive (contour, 3.5, cp, 0.0, &targets); // 30 c/s: reaches 61.15 by the end
+            int early = 0;
+            for (size_t i = 0; i < targets.size(); ++i)
+                if (i * 0.004 > 0.6 && i * 0.004 < 2.1 && std::fabs (targets[i] - 60.0) > 0.01)
+                    ++early; // up to 60.73: still C4
+            char label[128];
+            std::snprintf (label, sizeof label, "drift 30c/s on C4, vibrato +-%.0fc: target held past the halfway point", vib * 100.0);
+            check (early == 0, label, early);
+            std::snprintf (label, sizeof label, "drift 30c/s, vibrato +-%.0fc: gives way to C#4 once the pitch has clearly left", vib * 100.0);
+            check (std::fabs (targets.back() - 61.0) < 0.01, label, targets.back());
+        }
+
         // Real note changes must still be recognised quickly, vibrato or not.
         struct Step { const char* name; double from, to, depth; };
         const Step steps[] = {
@@ -402,6 +452,36 @@ int main()
                     ++bad;
             }
         check (bad == 0, "pitches/vowels with octave or tracking errors", bad);
+    }
+
+    // ------------------------------------------------------------------ 7b2. inharmonic residue
+    std::printf ("7b2. Detection ignores a strong inharmonic tone high above the voice (stem-separation residue, bleed)\n");
+    {
+        int bad = 0;
+        double worst = 1.0;
+        for (double tone : { 2230.0, 3010.0, 2600.0 })
+            for (int midi : { 52, 57, 60, 64, 69 })
+            {
+                const double sung = midi + 0.22;
+                auto in = makeVoice (fs, 1.5, [&] (double) { return midiToHz (sung); }, kAh, 3u + (unsigned) midi, 0.004);
+                for (size_t i = 0; i < in.size(); ++i)
+                    in[i] += (float) (0.15 * std::sin (2.0 * kPi * tone * (double) i / fs));
+                auto ps = measurePitch (in, fs, 60, 1300);
+                int ok = 0, n = 0;
+                for (auto& p : ps)
+                {
+                    if (p.t < 0.4)
+                        continue;
+                    ++n;
+                    if (std::fabs ((p.midi - sung) * 100.0) < 15.0)
+                        ++ok;
+                }
+                worst = std::min (worst, n ? (double) ok / n : 0.0);
+                if (ok < n * 0.97)
+                    ++bad;
+            }
+        check (bad == 0, "voice + inharmonic tone: cases with wrong pitch frames", bad);
+        check (worst > 0.97, "voice + inharmonic tone: worst fraction of frames within 15 cents", worst);
     }
 
     // ------------------------------------------------------------------ 7c. sample rates

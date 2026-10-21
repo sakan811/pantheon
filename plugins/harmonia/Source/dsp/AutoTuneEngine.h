@@ -123,6 +123,8 @@ public:
         ts = 0.0;
         voicedRun = unvoicedRun = 0;
         inVoiced = false;
+        haveReference = false;
+        outlierRun = sinceReference = 0;
         lastPeriod = 0.0f;
         mixSmoothed = params.mix;
         starved.store (0, std::memory_order_relaxed);
@@ -258,11 +260,41 @@ private:
         return { n.voiced ? n.period : 0.0f, n.cents, n.voiced };
     }
 
+    // A detection far from where the voice has been a moment ago (more than an octave) is almost
+    // always a glitch (a sub-harmonic lock on noise or a creaky onset), not a leap: such a pitch
+    // would pull the correction off and re-space grains at the wrong period. It is treated as
+    // unvoiced, so that stretch of audio passes through untouched. A voice that really has moved
+    // is accepted once the new pitch has persisted for a quarter of a second.
+    void rejectOutlier (PitchDetector::Result& det)
+    {
+        constexpr float kMaxLeapCents = 1300.0f;
+        constexpr int kPersistHops = 60;
+
+        ++sinceReference;
+        if (sinceReference > 250) // a second without a pitch: nothing to compare with
+            haveReference = false;
+        if (! det.voiced)
+            return;
+
+        const float c = 1200.0f * std::log2 ((float) fs / det.period);
+        if (haveReference && std::fabs (c - referenceCents) > kMaxLeapCents && outlierRun < kPersistHops)
+        {
+            ++outlierRun;
+            det.voiced = false;
+            return;
+        }
+        outlierRun = 0;
+        sinceReference = 0;
+        referenceCents = haveReference ? referenceCents + 0.02f * (c - referenceCents) : c;
+        haveReference = true;
+    }
+
     // ---- per-hop processing ----
     void runHop (int64_t tIn)
     {
         const float prev = inVoiced ? lastPeriod : 0.0f;
-        const auto det = detector.detect (params.minHz, params.maxHz, prev, inVoiced);
+        auto det = detector.detect (params.minHz, params.maxHz, prev, inVoiced);
+        rejectOutlier (det);
 
         if (det.voiced)
         {
@@ -540,6 +572,9 @@ private:
 
     int voicedRun = 0, unvoicedRun = 0;
     bool inVoiced = false;
+    bool haveReference = false;
+    float referenceCents = 0.0f;
+    int outlierRun = 0, sinceReference = 0;
     float lastPeriod = 0.0f;
     float mixSmoothed = 1.0f;
     std::atomic<int> starved { 0 };

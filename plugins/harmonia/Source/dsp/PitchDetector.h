@@ -12,9 +12,15 @@ namespace harmonia
 // YIN pitch detector tuned for sung vocals. It searches at a decimated rate (~24 kHz) and
 // then refines the period at the full rate, which keeps the CPU cost low and the
 // resolution well below a cent.
+//
+// The pitch is measured on a low-passed copy of the voice (4th-order Butterworth, cutoff about
+// four times the pitch being tracked). The fundamental and its first harmonics carry the pitch;
+// the band above mostly holds breath, sibilance and the residue left in separated stems or by
+// bleed, which is not harmonic with the voice and can make YIN hop between two periods.
 class PitchDetector
 {
 public:
+
     struct Result
     {
         bool voiced = false;
@@ -43,6 +49,8 @@ public:
         while (cap < fullNeeded)
             cap <<= 1;
         full.resize (cap);
+        fullLp.resize (cap);
+
 
         d.assign ((size_t) tauMaxD + 2, 0.0f);
         cm.assign ((size_t) tauMaxD + 2, 1.0f);
@@ -53,6 +61,10 @@ public:
     {
         dec.clear();
         full.clear();
+        fullLp.clear();
+        lp[0].clear();
+        lp[1].clear();
+        setCutoff (kDefaultCutoffHz);
         accum = 0.0f;
         accumCount = 0;
     }
@@ -72,7 +84,9 @@ public:
     void push (float x)
     {
         full.push (x);
-        accum += x;
+        const float y = lp[1].process (lp[0].process (x));
+        fullLp.push (y);
+        accum += y;
         if (++accumCount == decim)
         {
             dec.push (accum / (float) decim);
@@ -180,7 +194,7 @@ public:
 
         // Refine at the full rate around the coarse estimate.
         const int totalFull = total * decim;
-        const float* fx = full.tail (totalFull);
+        const float* fx = fullLp.tail (totalFull);
         const int Wf = winD * decim;
         const int maxLagF = tauMaxD * decim;
         const float coarse = tauD * (float) decim;
@@ -213,6 +227,10 @@ public:
                 period += std::clamp (0.5f * (c0 - c2) / den, -1.0f, 1.0f);
         }
 
+        // Follow the voice with the filter: low voices keep their harmonics, high ones their fundamental.
+        const float fcWanted = std::clamp (4.0f * (float) fs / period, kMinCutoffHz, kMaxCutoffHz);
+        setCutoff (cutoffHz + 0.3f * (fcWanted - cutoffHz));
+
         res.voiced = true;
         res.period = period;
         res.confidence = std::clamp (1.0f - chosen.v, 0.0f, 1.0f);
@@ -220,9 +238,45 @@ public:
     }
 
 private:
+    static constexpr float kDefaultCutoffHz = 1500.0f, kMinCutoffHz = 1000.0f, kMaxCutoffHz = 3500.0f;
+
+    struct LowPass
+    {
+        double b0 = 1, b1 = 0, b2 = 0, a1 = 0, a2 = 0, z1 = 0, z2 = 0;
+
+        void design (double w0, double q)
+        {
+            const double c = std::cos (w0), alpha = std::sin (w0) / (2.0 * q), a0 = 1.0 + alpha;
+            b0 = 0.5 * (1.0 - c) / a0;
+            b1 = (1.0 - c) / a0;
+            b2 = b0;
+            a1 = -2.0 * c / a0;
+            a2 = (1.0 - alpha) / a0;
+        }
+        void clear() { z1 = z2 = 0.0; }
+        float process (float x)
+        {
+            const double y = b0 * x + z1;
+            z1 = b1 * x - a1 * y + z2;
+            z2 = b2 * x - a2 * y;
+            return (float) y;
+        }
+    };
+
+    // Butterworth sections (Q = 1 / (2 cos (pi/8)) and 1 / (2 cos (3 pi/8))).
+    void setCutoff (float hz)
+    {
+        cutoffHz = hz;
+        const double w0 = 2.0 * 3.14159265358979323846 * std::min ((double) hz, 0.45 * fs) / fs;
+        lp[0].design (w0, 0.5411961);
+        lp[1].design (w0, 1.3065630);
+    }
+
     double fs = 48000.0, fsDec = 24000.0;
+    float cutoffHz = kDefaultCutoffHz;
     int decim = 2, tauMaxD = 0, winD = 0;
-    MirrorRing dec, full;
+    MirrorRing dec, full, fullLp; // `full` is the raw input; `dec` and `fullLp` come from the low-passed copy
+    LowPass lp[2];
     float accum = 0.0f;
     int accumCount = 0;
     std::vector<float> d, cm;
