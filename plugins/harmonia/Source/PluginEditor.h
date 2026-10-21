@@ -17,6 +17,9 @@ public:
 
 private:
     static constexpr int kDesignW = 880, kDesignH = 560;
+    static inline const juce::Rectangle<int> kSubtitleBounds { 22, 40, 400, 18 };
+
+    using ComboAttachment = juce::AudioProcessorValueTreeState::ComboBoxAttachment;
 
     struct Content : juce::Component
     {
@@ -38,12 +41,13 @@ private:
     void paintContent (juce::Graphics&);
     void timerCallback() override;
 
-    void setChoice (const char* id, int index);
-    void setFloat (const char* id, float plainValue);
-    void setBool (const juce::String& id, bool value);
+    // Sets any parameter from its plain value (choice index, bool as 0/1, or float), as one host gesture.
+    void setParam (const juce::String& id, float plainValue);
     void toggleNote (int pitchClass);
     void applyPreset (int index);
     void onDetectClicked();
+    void setupChoice (juce::ComboBox&, std::unique_ptr<ComboAttachment>&, const char* id, const juce::String& tip);
+    juce::String makeSubtitle() const;
     void setupKnob (Knob&, const char* id, const juce::String& title, const juce::String& tip, bool bipolar = false);
 
     HarmoniaProcessor& proc;
@@ -59,12 +63,12 @@ private:
     juce::Label statusLabel;
     Knob knobs[5];
 
-    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> rangeAtt, keyAtt, scaleAtt;
+    std::unique_ptr<ComboAttachment> rangeAtt, keyAtt, scaleAtt;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> bypassAtt;
 
     bool awaitingKeyResult = false;
     juce::uint32 finishClickedAt = 0;
-    juce::String detectedText;
+    juce::String detectedText, subtitle;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (HarmoniaEditor)
 };

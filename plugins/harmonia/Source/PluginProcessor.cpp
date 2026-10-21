@@ -9,6 +9,15 @@ juce::String speedText (float v)
 {
     return v < 1.0f ? juce::String ("Instant") : juce::String (juce::roundToInt (v)) + " ms";
 }
+
+template <typename Item, size_t N>
+juce::StringArray namesOf (const Item (&items)[N])
+{
+    juce::StringArray names;
+    for (auto& item : items)
+        names.add (item.name);
+    return names;
+}
 } // namespace
 
 juce::AudioProcessorValueTreeState::ParameterLayout HarmoniaProcessor::createLayout()
@@ -22,15 +31,8 @@ juce::AudioProcessorValueTreeState::ParameterLayout HarmoniaProcessor::createLay
 
     juce::AudioProcessorValueTreeState::ParameterLayout layout;
 
-    StringArray keys;
-    for (auto* n : kNoteNames)
-        keys.add (n);
-    layout.add (std::make_unique<AudioParameterChoice> (ParameterID { ids::key, 1 }, "Key", keys, 0));
-
-    StringArray scales;
-    for (auto& s : kScales)
-        scales.add (s.name);
-    layout.add (std::make_unique<AudioParameterChoice> (ParameterID { ids::scale, 1 }, "Scale", scales, 0));
+    layout.add (std::make_unique<AudioParameterChoice> (ParameterID { ids::key, 1 }, "Key", StringArray (kNoteNames, 12), 0));
+    layout.add (std::make_unique<AudioParameterChoice> (ParameterID { ids::scale, 1 }, "Scale", namesOf (kScales), kChromaticScale));
 
     for (int i = 0; i < 12; ++i)
         layout.add (std::make_unique<AudioParameterBool> (ParameterID { ids::note (i), 1 },
@@ -56,9 +58,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout HarmoniaProcessor::createLay
         ParameterID { ids::tuning, 1 }, "Tuning (A4)", NormalisableRange<float> (415.0f, 466.0f, 0.1f), 440.0f,
         juce::AudioParameterFloatAttributes().withLabel ("Hz")));
 
-    layout.add (std::make_unique<AudioParameterChoice> (
-        ParameterID { ids::range, 1 }, "Voice",
-        StringArray { "Auto", "Low (bass / baritone)", "Mid (tenor / alto)", "High (soprano)" }, 0));
+    layout.add (std::make_unique<AudioParameterChoice> (ParameterID { ids::range, 1 }, "Voice", namesOf (kVoiceRanges), 0));
 
     layout.add (std::make_unique<AudioParameterBool> (ParameterID { ids::bypass, 1 }, "Bypass", false));
 
@@ -96,8 +96,9 @@ bool HarmoniaProcessor::isBusesLayoutSupported (const BusesLayout& layouts) cons
     return in == juce::AudioChannelSet::mono() || in == juce::AudioChannelSet::stereo();
 }
 
-uint16_t HarmoniaProcessor::computeMask (int key, int scale) const
+uint16_t HarmoniaProcessor::currentNoteMask() const
 {
+    const int scale = scaleIndex();
     if (scale == kCustomScale)
     {
         uint16_t m = 0;
@@ -106,7 +107,21 @@ uint16_t HarmoniaProcessor::computeMask (int key, int scale) const
                 m = (uint16_t) (m | (1u << i));
         return m;
     }
-    return scaleMask (key, juce::jlimit (0, kNumScales - 1, scale));
+    return scaleMask ((int) pKey->load(), juce::jlimit (0, kNumScales - 1, scale));
+}
+
+EngineParams HarmoniaProcessor::readParams() const
+{
+    EngineParams p;
+    p.corrector.noteMask = currentNoteMask();
+    p.corrector.retuneMs = pSpeed->load();
+    p.corrector.strength = pStrength->load() * 0.01f;
+    p.corrector.natural = pNatural->load() * 0.01f;
+    p.corrector.refA4 = pTuning->load();
+    p.formantSemitones = pFormant->load();
+    p.mix = pBypass->load() >= 0.5f ? 0.0f : 1.0f;
+    p.setVoiceRange ((int) pRange->load());
+    return p;
 }
 
 void HarmoniaProcessor::prepareToPlay (double sampleRate, int)
@@ -128,27 +143,10 @@ void HarmoniaProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
     if (! prepared.load())
         return;
 
-    const int key = (int) pKey->load();
-    const int scale = (int) pScale->load();
-    const uint16_t mask = computeMask (key, scale);
+    if (resetRequested.exchange (false))
+        engine->reset();
 
-    EngineParams p;
-    p.corrector.noteMask = mask;
-    p.corrector.retuneMs = pSpeed->load();
-    p.corrector.strength = pStrength->load() * 0.01f;
-    p.corrector.natural = pNatural->load() * 0.01f;
-    p.corrector.refA4 = pTuning->load();
-    p.formantSemitones = pFormant->load();
-    p.mix = pBypass->load() >= 0.5f ? 0.0f : 1.0f;
-
-    switch ((int) pRange->load())
-    {
-        case 1: p.minHz = 75.0f;  p.maxHz = 400.0f;  break; // low
-        case 2: p.minHz = 100.0f; p.maxHz = 700.0f;  break; // mid
-        case 3: p.minHz = 180.0f; p.maxHz = 1200.0f; break; // high
-        default: p.minHz = 75.0f; p.maxHz = 1000.0f; break; // auto
-    }
-    engine->setParams (p);
+    engine->setParams (readParams());
 
     // Key detection requests from the UI.
     switch (learnCommand.exchange (0))
@@ -175,7 +173,7 @@ void HarmoniaProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
     if (learning.load())
         learnAmount.store (engine->learnedAmount());
 
-    engine->process (buffer.getArrayOfWritePointers(), juce::jmin (2, buffer.getNumChannels()), buffer.getNumSamples());
+    engine->process (buffer.getArrayOfWritePointers(), buffer.getNumChannels(), buffer.getNumSamples());
 }
 
 bool HarmoniaProcessor::takeKeyResult (KeyResult& out)

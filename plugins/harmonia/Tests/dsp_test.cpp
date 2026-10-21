@@ -11,14 +11,6 @@ using namespace testsig;
 using harmonia::AutoTuneEngine;
 using harmonia::EngineParams;
 
-static int failures = 0;
-static void check (bool ok, const char* what, double value, const char* unit = "")
-{
-    std::printf ("  [%s] %-58s %8.3f %s\n", ok ? "PASS" : "FAIL", what, value, unit);
-    if (! ok)
-        ++failures;
-}
-
 static EngineParams makeParams (uint16_t mask, float retuneMs, float natural, float strength = 1.0f)
 {
     EngineParams p;
@@ -27,16 +19,6 @@ static EngineParams makeParams (uint16_t mask, float retuneMs, float natural, fl
     p.corrector.natural = natural;
     p.corrector.strength = strength;
     return p;
-}
-
-// cents error of the measured pitch against `target` in [t0, t1], shifted by engine latency
-static std::vector<double> centsVs (const std::vector<PitchSample>& ps, double t0, double t1, double targetMidi)
-{
-    std::vector<double> v;
-    for (auto& p : ps)
-        if (p.t >= t0 && p.t <= t1)
-            v.push_back ((p.midi - targetMidi) * 100.0);
-    return v;
 }
 
 int main()
@@ -276,20 +258,61 @@ int main()
     }
 
     // ------------------------------------------------------------------ 7c. sample rates
-    std::printf ("7c. Other sample rates: A3 35 cents sharp, hard tune, + vibrato note soft\n");
-    for (double rate : { 44100.0, 88200.0, 96000.0 })
+    std::printf ("7c. Other sample rates and low voices: 35 cents sharp, hard tune\n");
     {
-        auto in = makeVoice (rate, 2.5, [] (double) { return midiToHz (57.35); });
+        const struct { double rate, midi; } cases[] = {
+            { 22050, 57 }, { 44100, 57 }, { 88200, 57 }, { 96000, 57 }, { 192000, 57 }, { 96000, 41 }, { 192000, 41 },
+        };
+        for (auto& c : cases)
+        {
+            auto in = makeVoice (c.rate, 2.5, [&] (double) { return midiToHz (c.midi + 0.35); });
+            AutoTuneEngine eng;
+            eng.prepare (c.rate, 1);
+            eng.setParams (makeParams (chromatic, 0.0f, 0.0f));
+            auto out = runEngine (eng, in);
+            auto s = stats (centsVs (measurePitch (out, c.rate), 1.0 + eng.latencySamples() / c.rate, 2.3, c.midi));
+            char label[96];
+            std::snprintf (label, sizeof label, "%.0f Hz, midi %.0f: mean err (stddev %.2f, starved %d)", c.rate, c.midi, s.stddev,
+                           eng.starvedEvents());
+            check (s.n > 20 && std::fabs (s.mean) < 2.0 && s.stddev < 2.0 && eng.starvedEvents() == 0, label, s.mean, "cents");
+        }
+    }
+
+    // ------------------------------------------------------------------ 7d. determinism
+    std::printf ("7d. Output depends only on the input: not on block size, and reset() restores a clean state\n");
+    {
+        auto in = makeVoice (fs, 3.0, [] (double t) { return t < 0.3 ? 0.0 : midiToHz (55.3 + 4.0 * std::sin (t * 1.7) + 0.3 * std::sin (t * 35.0)); });
+        auto render = [&] (AutoTuneEngine& eng, int block) {
+            eng.setParams (makeParams (chromatic, 30.0f, 0.5f));
+            return runEngine (eng, in, block);
+        };
         AutoTuneEngine eng;
-        eng.prepare (rate, 1);
-        eng.setParams (makeParams (chromatic, 0.0f, 0.0f));
-        auto out = runEngine (eng, in);
-        auto ps = measurePitch (out, rate);
-        auto s = stats (centsVs (ps, 1.0 + eng.latencySamples() / rate, 2.3, 57.0));
-        char label[96];
-        std::snprintf (label, sizeof label, "%.0f Hz: mean err (stddev %.2f, latency %.1f ms, starved %d)", rate, s.stddev,
-                       1000.0 * eng.latencySamples() / rate, eng.starvedEvents());
-        check (s.n > 20 && std::fabs (s.mean) < 2.0 && s.stddev < 2.0 && eng.starvedEvents() == 0, label, s.mean, "cents");
+        eng.prepare (fs, 1);
+        const auto reference = render (eng, 480);
+
+        for (int block : { 1, 7, 4096 })
+        {
+            AutoTuneEngine other;
+            other.prepare (fs, 1);
+            char label[64];
+            std::snprintf (label, sizeof label, "block size %d gives identical output", block);
+            check (render (other, block) == reference, label, block);
+        }
+
+        eng.reset();
+        check (render (eng, 480) == reference, "same output after reset()", 0);
+
+        // Both channels of a stereo pair must be treated identically.
+        AutoTuneEngine stereo;
+        stereo.prepare (fs, 2);
+        stereo.setParams (makeParams (chromatic, 30.0f, 0.5f));
+        auto l = in, r = in;
+        for (size_t pos = 0; pos + 480 <= l.size(); pos += 480)
+        {
+            float* ch[2] = { l.data() + pos, r.data() + pos };
+            stereo.process (ch, 2, 480);
+        }
+        check (l == r, "identical stereo channels stay identical", 0);
     }
 
     // ------------------------------------------------------------------ 8. CPU

@@ -8,7 +8,7 @@
 class PitchGraph : public juce::Component, private juce::Timer
 {
 public:
-    explicit PitchGraph (HarmoniaProcessor& p) : proc (p) { startTimerHz (30); }
+    explicit PitchGraph (HarmoniaProcessor& p) : proc (p), lastMask (p.currentNoteMask()) { startTimerHz (30); }
 
     int singingPitchClass() const { return singingPc; }
 
@@ -33,7 +33,7 @@ public:
             const int hi = (int) std::ceil (viewCenter + kSemitonesShown * 0.5f) + 1;
             for (int n = lo; n <= hi; ++n)
             {
-                const int pc = ((n % 12) + 12) % 12;
+                const int pc = harmonia::pitchClass (n);
                 const bool allowed = (mask & (1u << pc)) != 0;
                 const float yTop = yOf ((float) n + 0.5f);
                 const juce::Rectangle<float> lane (plot.getX(), yTop, plot.getWidth(), laneH);
@@ -88,17 +88,20 @@ private:
 
     static juce::String noteName (int midi)
     {
-        static const char* names[12] = { "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B" };
-        const int pc = ((midi % 12) + 12) % 12;
-        return juce::String (names[pc]) + juce::String ((int) std::floor ((double) midi / 12.0) - 1);
+        return juce::String (harmonia::kNoteNames[harmonia::pitchClass (midi)]) + juce::String ((int) std::floor ((double) midi / 12.0) - 1);
+    }
+
+    // How many of the most recent analysis hops fit on screen.
+    int visibleHops() const
+    {
+        return juce::jmin (harmonia::AutoTuneEngine::kHistory - 4, (int) (proc.hopRateHz() * kSecondsShown));
     }
 
     template <typename YFn>
     void drawTraces (juce::Graphics& g, juce::Rectangle<float> plot, YFn yOf)
     {
         const int write = proc.historyWriteIndex();
-        const double hopRate = proc.hopRateHz();
-        const int visible = juce::jmin (harmonia::AutoTuneEngine::kHistory - 4, (int) (hopRate * kSecondsShown));
+        const int visible = visibleHops();
         const int first = juce::jmax (0, write - visible);
         const float pxPerHop = plot.getWidth() / (float) visible;
 
@@ -130,24 +133,24 @@ private:
             prevIn = h.inMidi;
         }
 
-        const auto stroke = [] (float w) { return juce::PathStrokeType (w, juce::PathStrokeType::curved, juce::PathStrokeType::rounded); };
         g.setColour (theme::sung.withAlpha (0.85f));
-        g.strokePath (sungPath, stroke (1.6f));
+        g.strokePath (sungPath, theme::stroke (1.6f));
         g.setColour (theme::accent.withAlpha (0.18f));
-        g.strokePath (outPath, stroke (7.0f));
+        g.strokePath (outPath, theme::stroke (7.0f));
         g.setColour (theme::accent);
-        g.strokePath (outPath, stroke (2.4f));
+        g.strokePath (outPath, theme::stroke (2.4f));
     }
 
     void timerCallback() override
     {
         const int write = proc.historyWriteIndex();
+        const bool hadContent = anyVoiced;
         anyVoiced = false;
         voicedNow = false;
         singingPc = -1;
         readout.clear();
 
-        const int visible = juce::jmin (harmonia::AutoTuneEngine::kHistory - 4, (int) (proc.hopRateHz() * kSecondsShown));
+        const int visible = visibleHops();
         for (int i = juce::jmax (0, write - visible); i < write; ++i)
             if (proc.historyAt (i).voiced > 0.0f)
             {
@@ -166,7 +169,7 @@ private:
             targetNow = h.targetMidi;
             const int nearest = (int) std::lround (h.inMidi);
             const int cents = (int) std::lround ((h.inMidi - (float) nearest) * 100.0f);
-            singingPc = ((nearest % 12) + 12) % 12;
+            singingPc = harmonia::pitchClass (nearest);
             readoutIn = noteName (nearest) + "  " + (cents >= 0 ? "+" : "") + juce::String (cents) + juce::String (juce::CharPointer_UTF8 ("\xc2\xa2"));
             readoutOut = noteName ((int) std::lround (h.outMidi));
             readout = readoutIn;
@@ -174,7 +177,14 @@ private:
             viewCenter += 0.10f * (juce::jlimit (30.0f, 90.0f, 0.5f * (h.inMidi + h.targetMidi)) - viewCenter);
             break;
         }
-        repaint();
+
+        // While nothing is being sung the picture is static: only redraw when the lanes change.
+        const uint16_t mask = proc.currentNoteMask();
+        if (anyVoiced || hadContent || mask != lastMask)
+        {
+            lastMask = mask;
+            repaint();
+        }
     }
 
     static constexpr float kSecondsShown = 3.5f;
@@ -184,5 +194,6 @@ private:
     float targetNow = 0.0f;
     bool anyVoiced = false, voicedNow = false;
     int singingPc = -1;
+    uint16_t lastMask; // note mask as last drawn, to notice changes while idle
     juce::String readout, readoutIn, readoutOut;
 };

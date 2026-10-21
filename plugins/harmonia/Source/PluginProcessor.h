@@ -38,7 +38,11 @@ public:
     bool acceptsMidi() const override { return false; }
     bool producesMidi() const override { return false; }
     bool isMidiEffect() const override { return false; }
-    double getTailLengthSeconds() const override { return 0.0; }
+    // The last `latency` of the vocal is still inside the engine when the input ends.
+    double getTailLengthSeconds() const override { return getSampleRate() > 0.0 ? getLatencySamples() / getSampleRate() : 0.0; }
+
+    // The host restarted or jumped: drop the audio history (done on the audio thread, in processBlock).
+    void reset() override { resetRequested.store (true); }
 
     int getNumPrograms() override { return 1; }
     int getCurrentProgram() override { return 0; }
@@ -54,11 +58,11 @@ public:
     juce::AudioProcessorValueTreeState apvts;
 
     // ---- shared with the editor ----
-    // Notes the tuner is currently allowed to land on (bit 0 = C).
-    uint16_t currentNoteMask() const { return computeMask ((int) pKey->load(), (int) pScale->load()); }
-
-    // Mask for a given key/scale selection, using the custom note switches for "Custom".
-    uint16_t computeMask (int key, int scale) const;
+    // Notes the tuner is currently allowed to land on (bit 0 = C): the selected key and scale,
+    // or the custom note switches for the "Custom" scale.
+    uint16_t currentNoteMask() const;
+    int scaleIndex() const { return (int) pScale->load(); }
+    float paramValue (const juce::String& id) const { return apvts.getRawParameterValue (id)->load(); }
 
     // Latest hop information for the pitch display.
     int historyWriteIndex() const { return engine->historyWriteIndex(); }
@@ -85,9 +89,11 @@ public:
 
 private:
     static juce::AudioProcessorValueTreeState::ParameterLayout createLayout();
+    harmonia::EngineParams readParams() const;
 
     std::unique_ptr<harmonia::AutoTuneEngine> engine;
     std::atomic<bool> prepared { false };
+    std::atomic<bool> resetRequested { false };
     juce::AudioParameterBool* bypassParam = nullptr;
 
     std::atomic<float>* pKey = nullptr;

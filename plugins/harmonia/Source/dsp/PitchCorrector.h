@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Scales.h"
+
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -8,7 +10,7 @@ namespace harmonia
 {
 struct CorrectorParams
 {
-    uint16_t noteMask = 0x0FFF; // allowed pitch classes (bit 0 = C)
+    uint16_t noteMask = kAllNotes; // allowed pitch classes (bit 0 = C)
     float retuneMs = 40.0f;     // time constant for gliding to the target note (0 = instant)
     float strength = 1.0f;      // 0..1, how much of the correction is applied
     float natural = 0.7f;       // 0..1, how much of the singer's own vibrato/drift is kept
@@ -137,12 +139,15 @@ public:
 private:
     static bool allowed (int note, uint16_t mask)
     {
-        return (mask & (1u << (((note % 12) + 12) % 12))) != 0;
+        return (mask & (1u << pitchClass (note))) != 0;
     }
+
+    // An empty mask means "no notes to snap to": the voice is left as it is.
+    static bool anyAllowed (uint16_t mask) { return (mask & kAllNotes) != 0; }
 
     static float nearestAllowed (float m, uint16_t mask)
     {
-        if ((mask & 0x0FFF) == 0)
+        if (! anyAllowed (mask))
             return m;
         const int base = (int) std::lround (m);
         float best = (float) base;
@@ -164,7 +169,7 @@ private:
     // Move to a new note only once the pitch is clearly past the halfway point.
     void updateTarget (float c, uint16_t mask)
     {
-        if ((mask & 0x0FFF) == 0)
+        if (! anyAllowed (mask))
         {
             target = c;
             return;

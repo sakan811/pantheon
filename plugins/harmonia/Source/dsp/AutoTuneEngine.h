@@ -1,7 +1,9 @@
 #pragma once
 
+#include "Kernels.h"
 #include "PitchCorrector.h"
 #include "PitchDetector.h"
+#include "Rings.h"
 #include "Scales.h"
 
 #include <algorithm>
@@ -13,13 +15,37 @@
 
 namespace harmonia
 {
+// Pitch search range per voice type. A narrower range tracks faster and cannot jump octaves.
+struct VoiceRange
+{
+    const char* name;
+    float minHz, maxHz;
+};
+
+inline constexpr float kLowestHz = 75.0f; // the detector is built to reach down to this pitch
+
+inline constexpr VoiceRange kVoiceRanges[] = {
+    { "Auto",                  kLowestHz, 1000.0f },
+    { "Low (bass / baritone)", kLowestHz,  400.0f },
+    { "Mid (tenor / alto)",    100.0f,     700.0f },
+    { "High (soprano)",        180.0f,    1200.0f },
+};
+inline constexpr int kNumVoiceRanges = (int) (sizeof (kVoiceRanges) / sizeof (kVoiceRanges[0]));
+
 struct EngineParams
 {
     CorrectorParams corrector;
     float formantSemitones = 0.0f; // 0 keeps the singer's own vocal character
     float mix = 1.0f;              // 0 = dry (delayed), 1 = fully tuned
-    float minHz = 75.0f;
-    float maxHz = 900.0f;
+    float minHz = kVoiceRanges[0].minHz;
+    float maxHz = kVoiceRanges[0].maxHz;
+
+    void setVoiceRange (int index)
+    {
+        const auto& r = kVoiceRanges[std::clamp (index, 0, kNumVoiceRanges - 1)];
+        minHz = r.minHz;
+        maxHz = r.maxHz;
+    }
 };
 
 // Real-time pitch corrector for monophonic voice.
@@ -36,7 +62,6 @@ class AutoTuneEngine
 {
 public:
     static constexpr int kMaxChannels = 2;
-    static constexpr float kDesignMinHz = 75.0f;
 
     struct HopInfo
     {
@@ -55,24 +80,26 @@ public:
         latency = (int) std::ceil (0.046 * fs);
         unvoicedPeriod = std::max (32, (int) std::lround (0.006 * fs));
 
-        detector.prepare (fs, kDesignMinHz);
+        detector.prepare (fs, kLowestHz);
         corrector.prepare ((double) hop / fs);
 
-        int hs = 1;
-        while (hs < (int) (0.5 * fs))
-            hs <<= 1;
-        histMask = hs - 1;
+        // Synthesis reads the input at most `latency` + two grains back; keep generous headroom.
+        const int maxLag = detector.maxLagSamples();
+        historySize = 2 * latency + 4 * maxLag + 2 * hop;
+        detector.reserveHistory (historySize); // the detector's full-rate ring doubles as the mono history
         for (auto& h : hist)
-            h.assign ((size_t) hs, 0.0f);
-        monoHist.assign ((size_t) hs, 0.0f);
+            h.resize (historySize);
 
         int os = 1;
-        while (os < latency * 3 + 4 * detector.maxLagSamples())
+        while (os < latency * 3 + 4 * maxLag)
             os <<= 1;
         outMask = os - 1;
         for (auto& a : acc)
             a.assign ((size_t) os, 0.0f);
         wsum.assign ((size_t) os, 0.0f);
+
+        scores.assign ((size_t) (2 * std::max (2, (int) (0.2f * (float) maxLag)) + 1), 0.0f);
+        mixCoef = 1.0f - std::exp (-1.0f / (0.01f * (float) fs));
 
         reset();
     }
@@ -80,8 +107,7 @@ public:
     void reset()
     {
         for (auto& h : hist)
-            std::fill (h.begin(), h.end(), 0.0f);
-        std::fill (monoHist.begin(), monoHist.end(), 0.0f);
+            h.clear();
         for (auto& a : acc)
             std::fill (a.begin(), a.end(), 0.0f);
         std::fill (wsum.begin(), wsum.end(), 0.0f);
@@ -91,15 +117,15 @@ public:
         sampleCount = 0;
         emitted = 0;
         hopCounter = 0;
-        trackCount = trackHead = 0;
-        markCount = markHead = 0;
+        track.clear();
+        marks.clear();
         synthStarted = false;
         ts = 0.0;
         voicedRun = unvoicedRun = 0;
         inVoiced = false;
         lastPeriod = 0.0f;
         mixSmoothed = params.mix;
-        starved = 0;
+        starved.store (0, std::memory_order_relaxed);
         histWrite.store (0);
 
         runHop (0); // pre-roll: finalises the first hop of output
@@ -131,7 +157,7 @@ public:
     }
 
     // Diagnostics (read from the UI thread).
-    int starvedEvents() const { return starved; }
+    int starvedEvents() const { return starved.load (std::memory_order_relaxed); }
     int historyWriteIndex() const { return histWrite.load (std::memory_order_acquire); }
     HopInfo historyAt (int absoluteIndex) const { return history[(size_t) (absoluteIndex & (kHistory - 1))]; }
     double hopRateHz() const { return fs / (double) hop; }
@@ -140,21 +166,17 @@ public:
     {
         const int nch = std::min (numChannels, channels);
         const float mixTarget = params.mix;
-        const float mixCoef = 1.0f - std::exp (-1.0f / (0.01f * (float) fs));
 
         for (int i = 0; i < numSamples; ++i)
         {
-            const int64_t t = sampleCount;
             float mono = 0.0f;
             for (int c = 0; c < nch; ++c)
             {
                 const float v = io[c][i];
-                hist[(size_t) c][(size_t) (t & histMask)] = v;
+                hist[(size_t) c].push (v);
                 mono += v;
             }
-            mono /= (float) nch;
-            monoHist[(size_t) (t & histMask)] = mono;
-            detector.push (mono);
+            detector.push (mono / (float) nch);
             ++sampleCount;
 
             if (++hopCounter == hop)
@@ -169,11 +191,10 @@ public:
             const float w = wsum[slot];
             const float norm = 1.0f / std::max (w, 0.3f);
             const float dryAmt = std::max (0.0f, 1.0f - w / 0.3f);
-            const int64_t dryIdx = t - latency;
 
             for (int c = 0; c < nch; ++c)
             {
-                const float dry = dryIdx >= 0 ? hist[(size_t) c][(size_t) (dryIdx & histMask)] : 0.0f;
+                const float dry = hist[(size_t) c].tail (latency + 1)[0]; // the input, `latency` samples ago
                 const float wet = acc[(size_t) c][slot] * norm + dry * dryAmt;
                 io[c][i] = dry + (wet - dry) * mixSmoothed;
                 acc[(size_t) c][slot] = 0.0f;
@@ -207,38 +228,28 @@ private:
     static constexpr int kTrackCap = 512;
     static constexpr int kMarkCap = 4096;
 
-    // ---- track ring helpers (index 0 = oldest) ----
-    const TrackEntry& trackAt (int i) const { return track[(size_t) ((trackHead - trackCount + i + kTrackCap) % kTrackCap)]; }
-    const Mark& markAt (int i) const { return marks[(size_t) ((markHead - markCount + i + kMarkCap) % kMarkCap)]; }
-
-    void pushTrack (const TrackEntry& e)
+    // Pointer to input sample `pos`; everything up to the newest sample follows contiguously.
+    const float* monoAt (int64_t pos) const
     {
-        track[(size_t) trackHead] = e;
-        trackHead = (trackHead + 1) % kTrackCap;
-        trackCount = std::min (trackCount + 1, kTrackCap);
-    }
-    void pushMark (const Mark& m)
-    {
-        marks[(size_t) markHead] = m;
-        markHead = (markHead + 1) % kMarkCap;
-        markCount = std::min (markCount + 1, kMarkCap);
+        const int len = (int) std::clamp<int64_t> (sampleCount - pos, 1, detector.fullRateHistory().capacity());
+        return detector.fullRateHistory().tail (len);
     }
 
     TrackSample queryTrack (double t) const
     {
         TrackSample out;
-        if (trackCount == 0)
+        if (track.empty())
             return out;
 
-        int i = trackCount - 1;
-        while (i > 0 && trackAt (i).t > t)
+        int i = track.size() - 1;
+        while (i > 0 && track[i].t > t)
             --i;
 
-        const TrackEntry& a = trackAt (i);
-        if (i == trackCount - 1 || a.t >= t)
+        const TrackEntry& a = track[i];
+        if (i == track.size() - 1 || a.t >= t)
             return { a.voiced ? a.period : 0.0f, a.cents, a.voiced };
 
-        const TrackEntry& b = trackAt (i + 1);
+        const TrackEntry& b = track[i + 1];
         const float f = (float) ((t - a.t) / std::max (1e-9, b.t - a.t));
         if (a.voiced && b.voiced)
             return { a.period + f * (b.period - a.period), a.cents + f * (b.cents - a.cents), true };
@@ -246,8 +257,6 @@ private:
         const TrackEntry& n = f < 0.5f ? a : b;
         return { n.voiced ? n.period : 0.0f, n.cents, n.voiced };
     }
-
-    float mono (int64_t pos) const { return monoHist[(size_t) (pos & histMask)]; }
 
     // ---- per-hop processing ----
     void runHop (int64_t tIn)
@@ -280,30 +289,19 @@ private:
         const double centerDelay = 0.5 * ((double) detector.windowSamples() + (period > 0.0f ? (double) period : fs / 200.0));
 
         TrackEntry e;
-        e.t = std::max ((double) tIn - centerDelay, trackCount > 0 ? trackAt (trackCount - 1).t + 1.0 : -1e9);
+        e.t = std::max ((double) tIn - centerDelay, track.empty() ? -1e9 : track.back().t + 1.0);
         e.period = period;
         e.cents = out.active ? std::clamp (out.correctionCents, -600.0f, 600.0f) : 0.0f;
         e.voiced = inVoiced && out.active;
-        pushTrack (e);
+        track.push (e);
 
-        // UI history + key learning
-        {
-            const int w = histWrite.load (std::memory_order_relaxed);
-            HopInfo& h = history[(size_t) (w & (kHistory - 1))];
-            h.voiced = e.voiced ? 1.0f : 0.0f;
-            h.inMidi = out.inMidi;
-            h.outMidi = out.outMidi;
-            h.targetMidi = out.targetMidi;
-            histWrite.store (w + 1, std::memory_order_release);
+        // UI history
+        const int w = histWrite.load (std::memory_order_relaxed);
+        history[(size_t) (w & (kHistory - 1))] = { out.inMidi, out.outMidi, out.targetMidi, e.voiced ? 1.0f : 0.0f };
+        histWrite.store (w + 1, std::memory_order_release);
 
-            if (learning && e.voiced)
-            {
-                int pc = ((int) std::lround (out.inMidi)) % 12;
-                if (pc < 0)
-                    pc += 12;
-                chroma[(size_t) pc] += std::max (0.0f, det.confidence - 0.5f) * 2.0f;
-            }
-        }
+        if (learning && e.voiced)
+            chroma[(size_t) pitchClass ((int) std::lround (out.inMidi))] += std::max (0.0f, det.confidence - 0.5f) * 2.0f;
 
         generateMarks (tIn);
         synthesize (tIn);
@@ -313,52 +311,50 @@ private:
     double alignByPeak (int64_t pred, float T) const
     {
         const int half = std::max (2, (int) (T * 0.5f));
+        const float* x = monoAt (pred - half - 1); // x[i + 1] is the sample at p = pred - half + i
         float best = -1.0f;
-        int64_t bestPos = pred;
-        for (int64_t p = pred - half; p <= pred + half; ++p)
+        int bestI = half;
+        for (int i = 0; i <= 2 * half; ++i)
         {
-            const float s = 0.25f * mono (p - 1) + 0.5f * mono (p) + 0.25f * mono (p + 1);
+            const float s = 0.25f * x[i] + 0.5f * x[i + 1] + 0.25f * x[i + 2];
             const float v = s * s;
             if (v > best)
             {
                 best = v;
-                bestPos = p;
+                bestI = i;
             }
         }
-        return (double) bestPos;
+        return (double) (pred - half + bestI);
     }
 
     // Finds where the waveform around the previous mark reappears near `pred`, to a
     // fraction of a sample (parabolic peak of the normalised correlation).
-    double alignByCorrelation (double lastPos, int64_t pred, float T) const
+    double alignByCorrelation (double lastPos, int64_t pred, float T)
     {
         const int half = std::max (2, (int) (T * 0.5f));
         const int search = std::max (2, (int) (T * 0.2f));
+        const int len = 2 * half;
+        const int count = 2 * search + 1;
         const int64_t base = (int64_t) std::llround (lastPos);
 
-        float scores[512];
-        const int count = std::min (2 * search + 1, 512);
+        const float* ref = monoAt (base - half);                // the waveform around the previous mark
+        const float* win = monoAt (pred - search - half);       // candidate i is win[i .. i + len)
+        double energy = (double) kernels::sumSquares (win, len) + 1e-9;
+
         int bestIdx = 0;
         for (int i = 0; i < count; ++i)
         {
-            const int64_t c = pred - search + i;
-            float dot = 0.0f, e = 1e-9f;
-            for (int k = -half; k < half; ++k)
-            {
-                const float a = mono (base + k);
-                const float b = mono (c + k);
-                dot += a * b;
-                e += b * b;
-            }
-            scores[i] = dot / std::sqrt (e);
-            if (scores[i] > scores[bestIdx])
+            scores[(size_t) i] = kernels::dot (ref, win + i, len) / (float) std::sqrt (energy);
+            if (scores[(size_t) i] > scores[(size_t) bestIdx])
                 bestIdx = i;
+            if (i + 1 < count) // slide the window energy instead of recomputing it
+                energy = std::max (1e-9, energy + (double) win[i + len] * win[i + len] - (double) win[i] * win[i]);
         }
 
         double frac = 0.0;
         if (bestIdx > 0 && bestIdx < count - 1)
         {
-            const float c0 = scores[bestIdx - 1], c1 = scores[bestIdx], c2 = scores[bestIdx + 1];
+            const float c0 = scores[(size_t) bestIdx - 1], c1 = scores[(size_t) bestIdx], c2 = scores[(size_t) bestIdx + 1];
             const float den = c0 - 2.0f * c1 + c2;
             if (den < -1e-12f)
                 frac = std::clamp (0.5f * (c0 - c2) / den, -1.0f, 1.0f);
@@ -369,21 +365,21 @@ private:
 
     void generateMarks (int64_t tIn)
     {
-        if (trackCount == 0)
+        if (track.empty())
             return;
-        const double limit = trackAt (trackCount - 1).t;
+        const double limit = track.back().t;
 
-        if (markCount == 0)
+        if (marks.empty())
         {
-            const double p = std::floor (trackAt (trackCount - 1).t);
+            const double p = std::floor (limit);
             if (p < 0.0)
                 return;
-            pushMark ({ p, (float) unvoicedPeriod, false });
+            marks.push ({ p, (float) unvoicedPeriod, false });
         }
 
         for (int guard = 0; guard < 64; ++guard)
         {
-            const Mark last = markAt (markCount - 1);
+            const Mark last = marks.back();
             const TrackSample atLast = queryTrack (last.pos);
             const float stepP = atLast.voiced ? atLast.period : (float) unvoicedPeriod;
             const int64_t pred = (int64_t) std::llround (last.pos + (double) stepP);
@@ -400,58 +396,73 @@ private:
 
                 double pos = last.voiced ? alignByCorrelation (last.pos, pred, T) : alignByPeak (pred, T);
                 pos = std::max (pos, last.pos + std::max (2.0, 0.5 * (double) T));
-                pushMark ({ pos, T, true });
+                marks.push ({ pos, T, true });
             }
             else
             {
-                pushMark ({ (double) pred, (float) unvoicedPeriod, false });
+                marks.push ({ (double) pred, (float) unvoicedPeriod, false });
             }
         }
     }
 
     // ---- synthesis ----
-    float readCubic (const std::vector<float>& h, double pos) const
+    // Four-point cubic (Catmull-Rom) interpolation weights for a fractional position.
+    struct CubicTaps
+    {
+        int64_t first; // the taps are the samples first .. first + 3
+        float w[4];
+    };
+
+    static CubicTaps cubicTaps (double pos)
     {
         const int64_t i = (int64_t) std::floor (pos);
-        if (i < 1 || i + 2 >= sampleCount || sampleCount - i > (int64_t) histMask - 4)
-            return 0.0f;
         const float f = (float) (pos - (double) i);
-        const float y0 = h[(size_t) ((i - 1) & histMask)], y1 = h[(size_t) (i & histMask)];
-        const float y2 = h[(size_t) ((i + 1) & histMask)], y3 = h[(size_t) ((i + 2) & histMask)];
-        const float c1 = 0.5f * (y2 - y0);
-        const float c2 = y0 - 2.5f * y1 + 2.0f * y2 - 0.5f * y3;
-        const float c3 = 0.5f * (y3 - y0) + 1.5f * (y1 - y2);
-        return ((c3 * f + c2) * f + c1) * f + y1;
+        return { i - 1,
+                 { ((-0.5f * f + 1.0f) * f - 0.5f) * f,
+                   ((1.5f * f - 2.5f) * f) * f + 1.0f,
+                   ((-1.5f * f + 2.0f) * f + 0.5f) * f,
+                   (0.5f * f - 0.5f) * f * f } };
+    }
+
+    // The input samples a tap set reads, or nullptr if they are not (or no longer) available.
+    const float* tapSource (const MirrorRing& ring, const CubicTaps& taps) const
+    {
+        const int64_t len = sampleCount - taps.first;
+        return len >= 4 && len <= ring.capacity() ? ring.tail ((int) len) : nullptr;
     }
 
     void placeGrain (double markPos, double center, double halfLen, double formantRatio)
     {
         const int64_t n0 = (int64_t) std::floor (center);
         const double frac = center - (double) n0;
-        const int J = (int) std::ceil (halfLen) + 1;
-        const double invH = 3.14159265358979323846 / halfLen;
+        const int jLo = (int) std::max<int64_t> ((int64_t) std::ceil (frac - halfLen), emitted - n0);
+        const int jHi = (int) std::floor (frac + halfLen);
 
-        for (int j = -J; j <= J; ++j)
+        // Hann window by recurrence, cos (a + d) = 2 cos (d) cos (a) - cos (a - d): no libm call per sample.
+        const double d = 3.14159265358979323846 / halfLen;
+        const double k = 2.0 * std::cos (d);
+        const double a0 = ((double) jLo - frac) * d;
+        double cPrev = std::cos (a0 - d), cCur = std::cos (a0);
+
+        for (int j = jLo; j <= jHi; ++j)
         {
-            const int64_t n = n0 + j;
-            if (n < emitted)
-                continue;
-            const double u = (double) j - frac;
-            if (std::fabs (u) >= halfLen)
-                continue;
+            const float w = 0.5f * (1.0f + (float) cCur);
+            const double cNext = k * cCur - cPrev;
+            cPrev = cCur;
+            cCur = cNext;
 
-            const float w = 0.5f * (1.0f + (float) std::cos (u * invH));
-            const double srcPos = markPos + u * formantRatio;
-            const size_t slot = (size_t) (n & outMask);
+            const size_t slot = (size_t) ((n0 + j) & outMask);
+            const auto taps = cubicTaps (markPos + ((double) j - frac) * formantRatio);
             for (int c = 0; c < channels; ++c)
-                acc[(size_t) c][slot] += w * readCubic (hist[(size_t) c], srcPos);
+                if (const float* x = tapSource (hist[(size_t) c], taps))
+                    acc[(size_t) c][slot] += w * (taps.w[0] * x[0] + taps.w[1] * x[1] + taps.w[2] * x[2] + taps.w[3] * x[3]);
             wsum[slot] += w;
         }
     }
 
     void synthesize (int64_t tIn)
     {
-        if (markCount == 0)
+        if (marks.empty())
             return;
 
         const int64_t finalizeUpTo = tIn + hop; // outputs before this must be complete
@@ -459,27 +470,26 @@ private:
 
         if (! synthStarted)
         {
-            ts = markAt (0).pos + (double) latency;
+            ts = marks[0].pos + (double) latency;
             synthStarted = true;
         }
 
         for (int guard = 0; guard < 256; ++guard)
         {
             const double src = ts - (double) latency;
-            const Mark& newest = markAt (markCount - 1);
-            if (newest.pos <= src)
+            if (marks.back().pos <= src)
             {
                 if (ts - 0.5 * unvoicedPeriod < (double) finalizeUpTo)
-                    ++starved;
+                    starved.fetch_add (1, std::memory_order_relaxed);
                 break;
             }
 
             // nearest analysis mark to the source time
-            int j = markCount - 1;
-            while (j > 0 && markAt (j).pos > src)
+            int j = marks.size() - 1;
+            while (j > 0 && marks[j].pos > src)
                 --j;
-            const Mark& m0 = markAt (j);
-            const Mark& m1 = markAt (std::min (j + 1, markCount - 1));
+            const Mark& m0 = marks[j];
+            const Mark& m1 = marks[std::min (j + 1, marks.size() - 1)];
             const Mark& mk = (src - m0.pos <= m1.pos - src) ? m0 : m1;
 
             double Ts, Hw;
@@ -507,23 +517,23 @@ private:
 
     // ---- state ----
     double fs = 48000.0;
-    int channels = 2, hop = 192, latency = 2208, unvoicedPeriod = 288;
+    int channels = 2, hop = 192, latency = 2208, unvoicedPeriod = 288, historySize = 0;
+    float mixCoef = 0.002f;
     EngineParams params;
 
     PitchDetector detector;
     PitchCorrector corrector;
 
-    std::array<std::vector<float>, kMaxChannels> hist, acc;
-    std::vector<float> monoHist, wsum;
-    int64_t histMask = 0, outMask = 0;
+    std::array<MirrorRing, kMaxChannels> hist; // input history per channel
+    std::array<std::vector<float>, kMaxChannels> acc; // overlap-add output, indexed by time & outMask
+    std::vector<float> wsum, scores;
+    int64_t outMask = 0;
 
     int64_t sampleCount = 0, emitted = 0;
     int hopCounter = 0;
 
-    std::array<TrackEntry, kTrackCap> track {};
-    int trackCount = 0, trackHead = 0;
-    std::array<Mark, kMarkCap> marks {};
-    int markCount = 0, markHead = 0;
+    HistoryRing<TrackEntry, kTrackCap> track;
+    HistoryRing<Mark, kMarkCap> marks;
 
     bool synthStarted = false;
     double ts = 0.0;
@@ -532,7 +542,7 @@ private:
     bool inVoiced = false;
     float lastPeriod = 0.0f;
     float mixSmoothed = 1.0f;
-    int starved = 0;
+    std::atomic<int> starved { 0 };
 
     bool learning = false;
     std::array<float, 12> chroma {};

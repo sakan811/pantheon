@@ -5,6 +5,7 @@
 #include "../Source/dsp/AutoTuneEngine.h"
 
 #include <cmath>
+#include <cstdio>
 #include <functional>
 #include <random>
 #include <vector>
@@ -12,6 +13,15 @@
 namespace testsig
 {
 constexpr double kPi = 3.14159265358979323846;
+
+// Pass/fail reporting shared by the test programs.
+inline int failures = 0;
+inline void check (bool ok, const char* what, double value, const char* unit = "")
+{
+    std::printf ("  [%s] %-58s %8.3f %s\n", ok ? "PASS" : "FAIL", what, value, unit);
+    if (! ok)
+        ++failures;
+}
 
 struct Biquad
 {
@@ -171,11 +181,22 @@ inline Stats stats (const std::vector<double>& v)
     return s;
 }
 
+// Pitch error in cents of the measured pitch against `targetMidi`, for samples with t0 <= t <= t1.
+inline std::vector<double> centsVs (const std::vector<PitchSample>& ps, double t0, double t1, double targetMidi)
+{
+    std::vector<double> v;
+    for (auto& p : ps)
+        if (p.t >= t0 && p.t <= t1)
+            v.push_back ((p.midi - targetMidi) * 100.0);
+    return v;
+}
+
 // Run a mono signal through the engine in odd-sized blocks (exercises block handling).
 inline std::vector<float> runEngine (harmonia::AutoTuneEngine& eng, const std::vector<float>& in, int block = 480)
 {
     std::vector<float> out (in.size());
     std::vector<float> tmp ((size_t) block);
+    const int shorter = block > 64 ? block - 37 : std::max (1, block - 1);
     size_t pos = 0;
     int b = block;
     while (pos < in.size())
@@ -186,7 +207,7 @@ inline std::vector<float> runEngine (harmonia::AutoTuneEngine& eng, const std::v
         eng.process (chans, 1, (int) n);
         std::copy (tmp.begin(), tmp.begin() + (long) n, out.begin() + (long) pos);
         pos += n;
-        b = (b == block) ? block - 37 : block; // alternate block sizes
+        b = (b == block) ? shorter : block; // alternate block sizes
     }
     return out;
 }

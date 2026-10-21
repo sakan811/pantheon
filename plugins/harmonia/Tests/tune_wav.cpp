@@ -8,8 +8,16 @@
 
 #include <cstdlib>
 #include <cstring>
+#include <string>
 
 using namespace harmonia;
+
+static std::string lowerCase (std::string s)
+{
+    for (auto& c : s)
+        c = (char) std::tolower ((unsigned char) c);
+    return s;
+}
 
 int main (int argc, char** argv)
 {
@@ -33,16 +41,8 @@ int main (int argc, char** argv)
         else if (k == "--scale")
         {
             for (int n = 0; n < kNumScales; ++n)
-            {
-                std::string name = kScales[n].name;
-                for (auto& c : name)
-                    c = (char) std::tolower (c);
-                std::string q = v;
-                for (auto& c : q)
-                    c = (char) std::tolower (c);
-                if (name == q)
+                if (lowerCase (kScales[n].name) == lowerCase (v))
                     scale = n;
-            }
         }
         else if (k == "--speed")
             p.corrector.retuneMs = (float) std::atof (v.c_str());
@@ -54,9 +54,9 @@ int main (int argc, char** argv)
             p.formantSemitones = (float) std::atof (v.c_str());
         else if (k == "--range")
         {
-            if (v == "low") { p.minHz = 75; p.maxHz = 400; }
-            else if (v == "mid") { p.minHz = 100; p.maxHz = 700; }
-            else if (v == "high") { p.minHz = 180; p.maxHz = 1200; }
+            for (int n = 0; n < kNumVoiceRanges; ++n)
+                if (lowerCase (kVoiceRanges[n].name).rfind (lowerCase (v), 0) == 0) // "low" matches "Low (bass / baritone)"
+                    p.setVoiceRange (n);
         }
     }
     p.corrector.noteMask = scaleMask (root, scale);
@@ -102,9 +102,6 @@ int main (int argc, char** argv)
         return 1;
     }
 
-    // pitch report from the engine's own history
-    const int wi = eng.historyWriteIndex();
     std::printf ("processed %zu frames @ %d Hz, latency %d samples, starved %d\n", frames, in.sampleRate, lat, eng.starvedEvents());
-    (void) wi;
     return 0;
 }

@@ -18,6 +18,14 @@ FetchContent_Declare(
     GIT_SHALLOW ON)
 FetchContent_MakeAvailable(JUCE)
 
+set(HARMONIA_SOURCES
+    Source/PluginProcessor.cpp
+    Source/PluginEditor.cpp)
+
+set(HARMONIA_DEFINITIONS
+    JUCE_WEB_BROWSER=0
+    JUCE_USE_CURL=0)
+
 juce_add_plugin(Harmonia
     COMPANY_NAME "Harmonia"
     PRODUCT_NAME "Harmonia"
@@ -33,15 +41,12 @@ juce_add_plugin(Harmonia
     MICROPHONE_PERMISSION_ENABLED TRUE
     MICROPHONE_PERMISSION_TEXT "Harmonia needs the microphone to tune your voice in the standalone app.")
 
-target_sources(Harmonia PRIVATE
-    Source/PluginProcessor.cpp
-    Source/PluginEditor.cpp)
+target_sources(Harmonia PRIVATE ${HARMONIA_SOURCES})
 
 target_include_directories(Harmonia PRIVATE Source)
 
 target_compile_definitions(Harmonia PUBLIC
-    JUCE_WEB_BROWSER=0
-    JUCE_USE_CURL=0
+    ${HARMONIA_DEFINITIONS}
     JUCE_VST3_CAN_REPLACE_VST2=0
     JUCE_DISPLAY_SPLASH_SCREEN=0)
 
@@ -56,16 +61,12 @@ target_link_libraries(Harmonia
 #   cmake --build build --target HarmoniaDevTool && build/HarmoniaDevTool_artefacts/*/HarmoniaDevTool selftest
 juce_add_console_app(HarmoniaDevTool PRODUCT_NAME "HarmoniaDevTool")
 set_target_properties(HarmoniaDevTool PROPERTIES EXCLUDE_FROM_ALL TRUE)
-target_sources(HarmoniaDevTool PRIVATE
-    Tests/DevTool.cpp
-    Source/PluginProcessor.cpp
-    Source/PluginEditor.cpp)
+target_sources(HarmoniaDevTool PRIVATE Tests/DevTool.cpp ${HARMONIA_SOURCES})
 target_include_directories(HarmoniaDevTool PRIVATE Source)
 target_compile_definitions(HarmoniaDevTool PRIVATE
+    ${HARMONIA_DEFINITIONS}
     JucePlugin_Name="Harmonia"
-    JUCE_MODAL_LOOPS_PERMITTED=1
-    JUCE_WEB_BROWSER=0
-    JUCE_USE_CURL=0)
+    JUCE_MODAL_LOOPS_PERMITTED=1)
 target_link_libraries(HarmoniaDevTool
     PRIVATE juce::juce_audio_utils
     PUBLIC juce::juce_recommended_config_flags)

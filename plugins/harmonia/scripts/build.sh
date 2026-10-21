@@ -10,9 +10,7 @@ set -e
 cd "$(dirname "$0")/.."
 
 CONFIG="${1:-Release}"
-XCODE="${XCODE_DEV_DIR:-$(xcode-select -p)}"
-TC="$XCODE/Toolchains/XcodeDefault.xctoolchain/usr/bin"
-SDK="$XCODE/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk"
+source scripts/toolchain.sh
 
 # Make every sub-process (including JUCE's own helper builds) use Xcode's SDK.
 export DEVELOPER_DIR="$XCODE"
@@ -20,8 +18,8 @@ export SDKROOT="$SDK"
 
 cmake -S . -B build -G "Unix Makefiles" \
     -DCMAKE_BUILD_TYPE="$CONFIG" \
-    -DCMAKE_C_COMPILER="$TC/clang" -DCMAKE_CXX_COMPILER="$TC/clang++" \
-    -DCMAKE_OBJC_COMPILER="$TC/clang" -DCMAKE_OBJCXX_COMPILER="$TC/clang++" \
+    -DCMAKE_C_COMPILER="$CC" -DCMAKE_CXX_COMPILER="$CXX" \
+    -DCMAKE_OBJC_COMPILER="$CC" -DCMAKE_OBJCXX_COMPILER="$CXX" \
     -DCMAKE_OSX_SYSROOT="$SDK"
 
 cmake --build build --config "$CONFIG" -j "$(sysctl -n hw.ncpu)"

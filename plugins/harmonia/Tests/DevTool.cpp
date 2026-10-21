@@ -38,11 +38,8 @@ static std::vector<float> run (HarmoniaProcessor& p, const std::vector<float>& i
 static int selftest()
 {
     constexpr double fs = 48000.0;
-    int failures = 0;
-    auto check = [&] (bool ok, const char* what, double v) {
-        std::printf ("  [%s] %-60s %8.3f\n", ok ? "PASS" : "FAIL", what, v);
-        failures += ok ? 0 : 1;
-    };
+    using testsig::check;
+    using testsig::failures;
 
     HarmoniaProcessor proc;
     proc.setPlayConfigDetails (2, 2, fs, 512);
@@ -62,13 +59,7 @@ static int selftest()
         return testsig::makeVoice (fs, 2.5, [midi] (double) { return testsig::midiToHz (midi); });
     };
     auto measure = [&] (const std::vector<float>& x, double expected) {
-        auto ps = testsig::measurePitch (x, fs);
-        std::vector<double> v;
-        const double lat = proc.getLatencySamples() / fs;
-        for (auto& s : ps)
-            if (s.t > 1.2 + lat && s.t < 2.3)
-                v.push_back ((s.midi - expected) * 100.0);
-        return testsig::stats (v);
+        return testsig::stats (testsig::centsVs (testsig::measurePitch (x, fs), 1.2 + proc.getLatencySamples() / fs, 2.3, expected));
     };
 
     {

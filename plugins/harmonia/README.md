@@ -79,19 +79,20 @@ build/HarmoniaDevTool_artefacts/Release/HarmoniaDevTool selftest
 build/HarmoniaDevTool_artefacts/Release/HarmoniaDevTool snapshot ui.png
 ```
 
-## Test results (synthetic voices, 44.1–96 kHz)
+## Test results (synthetic voices, 22–192 kHz)
 
 * Steady notes land within ~0.05 cent of the target; wobble < 1 cent (E2 to C6, two vowels).
 * Vibrato depth kept ≥ 100 % at *Natural 100*, ≤ 15 % at *Natural 0*.
 * Formants unchanged when shifting 3 semitones (spectral centroid ratio 1.04; naive resampling gives 1.19).
-* ~3 % of one core (stereo, 48 kHz). Passes `auval` and `pluginval` at strictness 10.
+* ~0.8 % of one core (stereo, 48 kHz; ~1.4 % at 96 kHz). Passes `auval` and `pluginval` at strictness 10.
 
 ## Layout
 
 ```
-Source/dsp/        JUCE-free engine: Scales, PitchDetector, PitchCorrector, AutoTuneEngine
+Source/dsp/        JUCE-free engine: Scales, PitchDetector, PitchCorrector, AutoTuneEngine,
+                   Kernels (SIMD-friendly sums), Rings (history buffers)
 Source/            PluginProcessor (parameters, host glue), PluginEditor
 Source/ui/         Theme/look-and-feel, PitchGraph, NoteKeyboard
 Tests/             dsp_test, tune_wav, DevTool, synthetic voice generator
-scripts/           build.sh, build_tests.sh
+scripts/           build.sh, build_tests.sh, toolchain.sh (shared Xcode clang/SDK lookup)
 ```

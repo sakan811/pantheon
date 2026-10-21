@@ -1,47 +1,14 @@
 #pragma once
 
+#include "Kernels.h"
+#include "Rings.h"
+
 #include <algorithm>
 #include <cmath>
 #include <vector>
 
 namespace harmonia
 {
-// Ring buffer that always exposes its most recent N samples as one contiguous block
-// (every sample is written twice).
-class MirrorRing
-{
-public:
-    void resize (int capacity)
-    {
-        n = capacity;
-        buf.assign ((size_t) n * 2, 0.0f);
-        head = 0;
-    }
-
-    void clear()
-    {
-        std::fill (buf.begin(), buf.end(), 0.0f);
-        head = 0;
-    }
-
-    void push (float v)
-    {
-        buf[(size_t) head] = v;
-        buf[(size_t) (head + n)] = v;
-        if (++head == n)
-            head = 0;
-    }
-
-    // Pointer to the oldest of the last `len` samples. The newest sample is tail(len)[len - 1].
-    const float* tail (int len) const { return buf.data() + head + n - len; }
-
-    int capacity() const { return n; }
-
-private:
-    std::vector<float> buf;
-    int n = 0, head = 0;
-};
-
 // YIN pitch detector tuned for sung vocals. It searches at a decimated rate (~24 kHz) and
 // then refines the period at the full rate, which keeps the CPU cost low and the
 // resolution well below a cent.
@@ -90,6 +57,14 @@ public:
         accumCount = 0;
     }
 
+    // Keeps at least `samples` of full-rate input history (see fullRateHistory()).
+    void reserveHistory (int samples)
+    {
+        if (samples > full.capacity())
+            full.resize (samples);
+    }
+    const MirrorRing& fullRateHistory() const { return full; }
+
     // Number of full-rate samples of history the detector looks at.
     int windowSamples() const { return winD * decim; }
     int maxLagSamples() const { return tauMaxD * decim; }
@@ -120,29 +95,13 @@ public:
         const float* x = dec.tail (total);
 
         // Level gate on the newest window.
-        {
-            const float* nw = x + tauMaxD;
-            float e = 0.0f;
-            for (int j = 0; j < winD; ++j)
-                e += nw[j] * nw[j];
-            res.rms = std::sqrt (e / (float) winD);
-            if (res.rms < 0.0015f) // about -56 dBFS
-                return res;
-        }
+        res.rms = std::sqrt (kernels::sumSquares (x + tauMaxD, winD) / (float) winD);
+        if (res.rms < 0.0015f) // about -56 dBFS
+            return res;
 
         // Difference function, always comparing against the newest `winD` samples.
         for (int tau = 1; tau <= tmax; ++tau)
-        {
-            const float* a = x + (tauMaxD - tau);
-            const float* b = x + tauMaxD;
-            float s = 0.0f;
-            for (int j = 0; j < winD; ++j)
-            {
-                const float diff = a[j] - b[j];
-                s += diff * diff;
-            }
-            d[(size_t) tau] = s;
-        }
+            d[(size_t) tau] = kernels::sumSquaredDiff (x + (tauMaxD - tau), x + tauMaxD, winD);
 
         cm[0] = 1.0f;
         float run = 0.0f;
@@ -235,14 +194,7 @@ public:
         for (int i = 0; i < span; ++i)
         {
             const int lag = lo + i;
-            const float* a = fx + (maxLagF - lag);
-            const float* b = fx + maxLagF;
-            float s = 0.0f;
-            for (int j = 0; j < Wf; ++j)
-            {
-                const float diff = a[j] - b[j];
-                s += diff * diff;
-            }
+            const float s = kernels::sumSquaredDiff (fx + (maxLagF - lag), fx + maxLagF, Wf);
             dv[i] = s;
             if (s < bestD)
             {

@@ -13,10 +13,19 @@ inline const juce::Colour faint     { 0xff3a4252 };
 inline const juce::Colour accent    { 0xff3de0bf }; // corrected pitch / "on"
 inline const juce::Colour sung      { 0xff6fa8ff }; // the singer's own pitch
 inline const juce::Colour warn      { 0xffffb454 };
+inline const juce::Colour whiteKeyOff { 0xff232936 };
+inline const juce::Colour blackKeyOff { 0xff12151b };
+inline const juce::Colour knobTop   { 0xff2a3140 };
+inline const juce::Colour knobBottom { 0xff171b24 };
 
 inline juce::Font font (float size, bool bold = false)
 {
     return juce::Font (juce::FontOptions (size, bold ? juce::Font::bold : juce::Font::plain));
+}
+
+inline juce::PathStrokeType stroke (float width)
+{
+    return juce::PathStrokeType (width, juce::PathStrokeType::curved, juce::PathStrokeType::rounded);
 }
 } // namespace theme
 
@@ -65,7 +74,7 @@ public:
         juce::Path track;
         track.addCentredArc (c.x, c.y, arcR, arcR, 0.0f, startAngle, endAngle, true);
         g.setColour (theme::faint.withAlpha (0.7f));
-        g.strokePath (track, juce::PathStrokeType (lineW, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+        g.strokePath (track, theme::stroke (lineW));
 
         const float from = bipolar ? (startAngle + endAngle) * 0.5f : startAngle;
         if (std::abs (angle - from) > 0.001f)
@@ -73,12 +82,12 @@ public:
             juce::Path val;
             val.addCentredArc (c.x, c.y, arcR, arcR, 0.0f, juce::jmin (from, angle), juce::jmax (from, angle), true);
             g.setColour (s.isEnabled() ? theme::accent : theme::dim);
-            g.strokePath (val, juce::PathStrokeType (lineW, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+            g.strokePath (val, theme::stroke (lineW));
         }
 
         const float bodyR = arcR - 9.0f;
-        g.setGradientFill (juce::ColourGradient (juce::Colour (0xff2a3140), c.x, c.y - bodyR,
-                                                 juce::Colour (0xff171b24), c.x, c.y + bodyR, false));
+        g.setGradientFill (juce::ColourGradient (theme::knobTop, c.x, c.y - bodyR,
+                                                 theme::knobBottom, c.x, c.y + bodyR, false));
         g.fillEllipse (c.x - bodyR, c.y - bodyR, bodyR * 2.0f, bodyR * 2.0f);
         g.setColour (theme::panelEdge);
         g.drawEllipse (c.x - bodyR, c.y - bodyR, bodyR * 2.0f, bodyR * 2.0f, 1.0f);

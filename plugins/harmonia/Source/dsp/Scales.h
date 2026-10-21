@@ -17,6 +17,8 @@ constexpr uint16_t intervalBits (std::initializer_list<int> semitones)
     return m;
 }
 
+inline constexpr uint16_t kAllNotes = 0x0FFF;
+
 struct ScaleInfo
 {
     const char* name;
@@ -24,7 +26,7 @@ struct ScaleInfo
 };
 
 inline constexpr ScaleInfo kScales[] = {
-    { "Chromatic",      0x0FFF },
+    { "Chromatic",      kAllNotes }, // must stay at kChromaticScale
     { "Major",          intervalBits ({ 0, 2, 4, 5, 7, 9, 11 }) },
     { "Minor",          intervalBits ({ 0, 2, 3, 5, 7, 8, 10 }) },
     { "Harmonic Minor", intervalBits ({ 0, 2, 3, 5, 7, 8, 11 }) },
@@ -36,13 +38,26 @@ inline constexpr ScaleInfo kScales[] = {
     { "Major Pentatonic", intervalBits ({ 0, 2, 4, 7, 9 }) },
     { "Minor Pentatonic", intervalBits ({ 0, 3, 5, 7, 10 }) },
     { "Blues",          intervalBits ({ 0, 3, 5, 6, 7, 10 }) },
-    { "Custom",         0x0FFF },
+    { "Custom",         kAllNotes },
 };
 
 inline constexpr int kNumScales = (int) (sizeof (kScales) / sizeof (kScales[0]));
-inline constexpr int kCustomScale = kNumScales - 1;
+inline constexpr int kChromaticScale = 0;
 inline constexpr int kMajorScale = 1;
 inline constexpr int kMinorScale = 2;
+inline constexpr int kCustomScale = kNumScales - 1;
+
+// Chromatic and Custom scales are not tied to a key; the others are relative to the root note.
+constexpr bool scaleUsesRoot (int scaleIndex)
+{
+    return scaleIndex != kChromaticScale && scaleIndex != kCustomScale;
+}
+
+// Pitch class (0 = C .. 11 = B) of a MIDI note number, also for negative numbers.
+constexpr int pitchClass (int midiNote)
+{
+    return ((midiNote % 12) + 12) % 12;
+}
 
 inline constexpr const char* kNoteNames[12] = { "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B" };
 

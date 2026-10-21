@@ -29,11 +29,8 @@ HarmoniaEditor::HarmoniaEditor (HarmoniaProcessor& p)
     content.onPaint = [this] (juce::Graphics& g) { paintContent (g); };
 
     // ---- header ----
-    for (auto& name : { "Auto", "Low (bass / baritone)", "Mid (tenor / alto)", "High (soprano)" })
-        rangeBox.addItem (name, rangeBox.getNumItems() + 1);
-    rangeBox.setTooltip ("Pick your voice type. It narrows the pitch search so tracking is faster and never jumps an octave.");
-    content.addAndMakeVisible (rangeBox);
-    rangeAtt = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (proc.apvts, ids::range, rangeBox);
+    setupChoice (rangeBox, rangeAtt, ids::range,
+                 "Pick your voice type. It narrows the pitch search so tracking is faster and never jumps an octave.");
 
     bypassButton.setClickingTogglesState (true);
     bypassButton.getProperties().set ("warn", true);
@@ -42,17 +39,9 @@ HarmoniaEditor::HarmoniaEditor (HarmoniaProcessor& p)
     bypassAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (proc.apvts, ids::bypass, bypassButton);
 
     // ---- key card ----
-    for (int i = 0; i < 12; ++i)
-        keyBox.addItem (kNoteNames[i], i + 1);
-    keyBox.setTooltip ("The key (root note) of your song.");
-    content.addAndMakeVisible (keyBox);
-    keyAtt = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (proc.apvts, ids::key, keyBox);
-
-    for (int i = 0; i < kNumScales; ++i)
-        scaleBox.addItem (kScales[i].name, i + 1);
-    scaleBox.setTooltip ("The notes your vocal is allowed to land on. Chromatic = every semitone (fixes pitch only).");
-    content.addAndMakeVisible (scaleBox);
-    scaleAtt = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (proc.apvts, ids::scale, scaleBox);
+    setupChoice (keyBox, keyAtt, ids::key, "The key (root note) of your song.");
+    setupChoice (scaleBox, scaleAtt, ids::scale,
+                 "The notes your vocal is allowed to land on. Chromatic = every semitone (fixes pitch only).");
 
     detectButton.setTooltip ("Click, sing or play a phrase of the song, then click again - Harmonia picks the key for you.");
     detectButton.onClick = [this] { onDetectClicked(); };
@@ -98,12 +87,24 @@ HarmoniaEditor::HarmoniaEditor (HarmoniaProcessor& p)
     getConstrainer()->setFixedAspectRatio ((double) kDesignW / (double) kDesignH);
     setSize (kDesignW, kDesignH);
 
+    subtitle = makeSubtitle();
     startTimerHz (20);
 }
 
 HarmoniaEditor::~HarmoniaEditor()
 {
     setLookAndFeel (nullptr);
+}
+
+void HarmoniaEditor::setupChoice (juce::ComboBox& box, std::unique_ptr<ComboAttachment>& attachment, const char* id,
+                                  const juce::String& tip)
+{
+    // The parameter owns the list of choices, so the box can never drift out of step with it.
+    if (auto* choice = dynamic_cast<juce::AudioParameterChoice*> (proc.apvts.getParameter (id)))
+        box.addItemList (choice->choices, 1);
+    box.setTooltip (tip);
+    content.addAndMakeVisible (box);
+    attachment = std::make_unique<ComboAttachment> (proc.apvts, id, box);
 }
 
 void HarmoniaEditor::setupKnob (Knob& k, const char* id, const juce::String& title, const juce::String& tip, bool bipolar)
@@ -119,12 +120,8 @@ void HarmoniaEditor::setupKnob (Knob& k, const char* id, const juce::String& tit
     k.attachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (proc.apvts, id, k.slider);
 
     if (auto* param = proc.apvts.getParameter (id))
-    {
-        const double def = param->convertFrom0to1 (param->getDefaultValue());
-        k.slider.setDoubleClickReturnValue (true, def);
-        if (param->getLabel().isNotEmpty() && id != ids::speed)
+        if (param->getLabel().isNotEmpty())
             k.slider.setTextValueSuffix (" " + param->getLabel());
-    }
 }
 
 void HarmoniaEditor::resized()
@@ -162,9 +159,7 @@ void HarmoniaEditor::paintContent (juce::Graphics& g)
     g.fillEllipse (20.0f + 126.0f, 24.0f, 7.0f, 7.0f);
     g.setColour (theme::dim);
     g.setFont (theme::font (12.5f));
-    const int latencyMs = juce::roundToInt (1000.0 * proc.getLatencySamples() / juce::jmax (1.0, proc.getSampleRate()));
-    g.drawText ("Natural pitch correction" + (proc.engineReady() ? juce::String ("   |   latency ") + juce::String (latencyMs) + " ms" : juce::String()),
-                22, 40, 400, 18, juce::Justification::centredLeft);
+    g.drawText (subtitle, kSubtitleBounds, juce::Justification::centredLeft);
     g.setFont (theme::font (11.0f, true));
     g.setColour (theme::dim);
     g.drawText ("VOICE", 520, 18, 54, 30, juce::Justification::centredRight);
@@ -202,17 +197,7 @@ void HarmoniaEditor::paintContent (juce::Graphics& g)
 
 // ---- parameter helpers ---------------------------------------------------------------
 
-void HarmoniaEditor::setChoice (const char* id, int index)
-{
-    if (auto* p = proc.apvts.getParameter (id))
-    {
-        p->beginChangeGesture();
-        p->setValueNotifyingHost (p->convertTo0to1 ((float) index));
-        p->endChangeGesture();
-    }
-}
-
-void HarmoniaEditor::setFloat (const char* id, float plainValue)
+void HarmoniaEditor::setParam (const juce::String& id, float plainValue)
 {
     if (auto* p = proc.apvts.getParameter (id))
     {
@@ -222,36 +207,25 @@ void HarmoniaEditor::setFloat (const char* id, float plainValue)
     }
 }
 
-void HarmoniaEditor::setBool (const juce::String& id, bool value)
-{
-    if (auto* p = proc.apvts.getParameter (id))
-    {
-        p->beginChangeGesture();
-        p->setValueNotifyingHost (value ? 1.0f : 0.0f);
-        p->endChangeGesture();
-    }
-}
-
 void HarmoniaEditor::toggleNote (int pc)
 {
-    const int scale = (int) proc.apvts.getRawParameterValue (ids::scale)->load();
-    if (scale != kCustomScale)
+    if (proc.scaleIndex() != kCustomScale)
     {
         // Start from what is currently lit, then switch to Custom so edits stick.
         const uint16_t mask = proc.currentNoteMask();
         for (int i = 0; i < 12; ++i)
-            setBool (ids::note (i), (mask & (1u << i)) != 0);
-        setChoice (ids::scale, kCustomScale);
+            setParam (ids::note (i), (mask & (1u << i)) != 0 ? 1.0f : 0.0f);
+        setParam (ids::scale, (float) kCustomScale);
     }
-    const bool now = proc.apvts.getRawParameterValue (ids::note (pc))->load() >= 0.5f;
-    setBool (ids::note (pc), ! now);
+    const bool now = proc.paramValue (ids::note (pc)) >= 0.5f;
+    setParam (ids::note (pc), now ? 0.0f : 1.0f);
 }
 
 void HarmoniaEditor::applyPreset (int index)
 {
-    setFloat (ids::speed, kPresets[index].speed);
-    setFloat (ids::strength, kPresets[index].strength);
-    setFloat (ids::natural, kPresets[index].natural);
+    setParam (ids::speed, kPresets[index].speed);
+    setParam (ids::strength, kPresets[index].strength);
+    setParam (ids::natural, kPresets[index].natural);
 }
 
 void HarmoniaEditor::onDetectClicked()
@@ -272,18 +246,17 @@ void HarmoniaEditor::onDetectClicked()
 
 void HarmoniaEditor::timerCallback()
 {
-    const int key = (int) proc.apvts.getRawParameterValue (ids::key)->load();
-    const int scale = (int) proc.apvts.getRawParameterValue (ids::scale)->load();
+    const bool usesRoot = scaleUsesRoot (proc.scaleIndex());
 
-    keyboard.setState (proc.currentNoteMask(), (scale == 0 || scale == kCustomScale) ? -1 : key, graph.singingPitchClass());
-    keyBox.setEnabled (scale != 0 && scale != kCustomScale);
+    keyboard.setState (proc.currentNoteMask(), usesRoot ? (int) proc.paramValue (ids::key) : -1, graph.singingPitchClass());
+    keyBox.setEnabled (usesRoot);
 
     // key detection feedback
     HarmoniaProcessor::KeyResult result;
     if (proc.takeKeyResult (result))
     {
-        setChoice (ids::key, result.root);
-        setChoice (ids::scale, result.minor ? kMinorScale : kMajorScale);
+        setParam (ids::key, (float) result.root);
+        setParam (ids::scale, (float) (result.minor ? kMinorScale : kMajorScale));
         detectedText = "Detected " + juce::String (kNoteNames[result.root]) + (result.minor ? " minor" : " major")
                        + "  (" + juce::String (juce::roundToInt (juce::jlimit (0.0f, 1.0f, result.score) * 100.0f)) + "% match)";
         awaitingKeyResult = false;
@@ -306,9 +279,9 @@ void HarmoniaEditor::timerCallback()
         statusLabel.setText (detectedText, juce::dontSendNotification);
 
     // highlight the matching style preset
-    const float speed = proc.apvts.getRawParameterValue (ids::speed)->load();
-    const float strength = proc.apvts.getRawParameterValue (ids::strength)->load();
-    const float natural = proc.apvts.getRawParameterValue (ids::natural)->load();
+    const float speed = proc.paramValue (ids::speed);
+    const float strength = proc.paramValue (ids::strength);
+    const float natural = proc.paramValue (ids::natural);
     for (int i = 0; i < 3; ++i)
     {
         const bool match = std::abs (speed - kPresets[i].speed) < 0.5f && std::abs (strength - kPresets[i].strength) < 0.5f
@@ -316,5 +289,22 @@ void HarmoniaEditor::timerCallback()
         presetButtons[i].setToggleState (match, juce::dontSendNotification);
     }
 
-    content.repaint (0, 0, kDesignW, 64); // latency readout
+    // The latency readout only changes when the host (re)prepares the plug-in.
+    const auto text = makeSubtitle();
+    if (text != subtitle)
+    {
+        subtitle = text;
+        content.repaint (kSubtitleBounds);
+    }
+}
+
+juce::String HarmoniaEditor::makeSubtitle() const
+{
+    juce::String text ("Natural pitch correction");
+    if (proc.engineReady())
+    {
+        const int latencyMs = juce::roundToInt (1000.0 * proc.getLatencySamples() / juce::jmax (1.0, proc.getSampleRate()));
+        text << "   |   latency " << latencyMs << " ms";
+    }
+    return text;
 }
