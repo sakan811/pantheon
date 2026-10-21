@@ -1,7 +1,7 @@
 // Offline command-line front end for the Harmonia engine: tune a WAV file.
 //   tune_wav in.wav out.wav [--key C] [--scale major|minor|chromatic|...] [--speed ms]
 //            [--natural 0..1] [--strength 0..1] [--formant semitones] [--range low|mid|high|auto]
-//            [--dump hops.csv]
+//            [--dump hops.csv] [--autokey 1]   (follow the key of the vocal; prints when it changes)
 // Prints a pitch report; the output is delay-compensated so it lines up with the input.
 
 #include "../Source/dsp/AutoTuneEngine.h"
@@ -54,6 +54,10 @@ int main (int argc, char** argv)
             p.corrector.strength = (float) std::atof (v.c_str());
         else if (k == "--formant")
             p.formantSemitones = (float) std::atof (v.c_str());
+        else if (k == "--dwell")
+            p.corrector.dwellMs = (float) std::atof (v.c_str());
+        else if (k == "--autokey")
+            p.autoKey = v != "0";
         else if (k == "--dump")
             dumpPath = v;
         else if (k == "--range")
@@ -94,17 +98,28 @@ int main (int argc, char** argv)
     // Per-hop trace of what the corrector saw and decided (the engine keeps only the latest ~1000 hops).
     FILE* dump = dumpPath.empty() ? nullptr : std::fopen (dumpPath.c_str(), "w");
     if (dump)
-        std::fprintf (dump, "t,in,out,target,voiced\n");
+        std::fprintf (dump, "t,in,out,target,voiced,conf\n");
     int dumped = eng.historyWriteIndex();
+    int lastKey = -1;
     for (size_t pos = 0; pos < total; pos += 512)
     {
         const int n = (int) std::min<size_t> (512, total - pos);
         float* ch[2] = { work[0].data() + pos, nch > 1 ? work[1].data() + pos : nullptr };
         eng.process (ch, nch, n);
+        if (p.autoKey)
+        {
+            const auto k = eng.trackedKey();
+            const int id = k.valid ? k.root * 2 + (k.minor ? 1 : 0) : -1;
+            if (id != lastKey)
+            {
+                lastKey = id;
+                std::printf ("%7.1f s  following %s\n", (double) pos / in.sampleRate, k.valid ? (std::string (kNoteNames[k.root]) + (k.minor ? " minor" : " major")).c_str() : "(not sure yet)");
+            }
+        }
         for (const int end = eng.historyWriteIndex(); dump && dumped < end; ++dumped)
         {
             const auto h = eng.historyAt (dumped);
-            std::fprintf (dump, "%.4f,%.3f,%.3f,%.3f,%d\n", dumped / eng.hopRateHz(), h.inMidi, h.outMidi, h.targetMidi, (int) h.voiced);
+            std::fprintf (dump, "%.4f,%.3f,%.3f,%.3f,%d,%.3f\n", dumped / eng.hopRateHz(), h.inMidi, h.outMidi, h.targetMidi, (int) h.voiced, h.confidence);
         }
     }
     if (dump)

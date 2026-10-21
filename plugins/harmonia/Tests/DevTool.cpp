@@ -11,6 +11,7 @@
 #include "WavIO.h"
 
 #include <cstdio>
+#include <cstdlib>
 
 static void setParam (HarmoniaProcessor& p, const juce::String& id, float plain)
 {
@@ -139,6 +140,24 @@ static int selftest()
         check (got && r.root == 0 && ! r.minor, "key detection finds C major", got ? r.root + (r.minor ? 100 : 0) : -1);
     }
 
+    {
+        // Auto key through the processor: the chosen key (F# minor) is overruled by what is sung (C major),
+        // and the editor-facing mask follows. Turning it off hands control back.
+        proc.prepareToPlay (fs, 512);
+        setParam (proc, ids::key, 6);
+        setParam (proc, ids::scale, (float) harmonia::kMinorScale);
+        setParam (proc, ids::autoKey, 1.0f);
+        const int tune[] = { 0, 2, 4, 2, 4, 5, 7, 5, 4, 2, 0, 2, 4, 7, 4, 2, 0, -1, 0, 2, 4, 5, 4, 2, 0 };
+        auto in = testsig::makeVoice (fs, 22.0, [&] (double t) { return testsig::midiToHz (60.0 + tune[(int) (t / 0.35) % 25]); });
+        run (proc, in);
+        int root = -1;
+        bool minor = true;
+        const bool following = proc.followedKey (root, minor);
+        check (following && proc.currentNoteMask() == harmonia::scaleMask (0, harmonia::kMajorScale), "auto key follows what is sung", proc.currentNoteMask());
+        setParam (proc, ids::autoKey, 0.0f);
+        check (! proc.followedKey (root, minor) && proc.currentNoteMask() == harmonia::scaleMask (6, harmonia::kMinorScale), "auto key off: the chosen key is back", proc.currentNoteMask());
+    }
+
     std::printf ("\n%s\n", failures == 0 ? "PROCESSOR TESTS PASSED" : "PROCESSOR TESTS FAILED");
     return failures == 0 ? 0 : 1;
 }
@@ -163,6 +182,17 @@ static int snapshot (const char* path, double feedSeconds, const char* wavPath =
             return 0.0;
         return testsig::midiToHz (notes[k] + 0.22 * std::sin (2.0 * testsig::kPi * 5.6 * t));
     });
+    if (std::getenv ("HARMONIA_AUTOKEY")) // demo: wrong key chosen, Auto key on, enough singing for it to settle
+    {
+        setParam (proc, ids::key, 6);
+        setParam (proc, ids::scale, (float) harmonia::kMinorScale);
+        setParam (proc, ids::autoKey, 1.0f);
+        const auto phrase = in;
+        in.clear();
+        for (int i = 0; i < 8; ++i)
+            in.insert (in.end(), phrase.begin(), phrase.end());
+        feedSeconds = (double) in.size() / fs;
+    }
     in.resize ((size_t) (feedSeconds * fs));
     if (wavPath)
     {

@@ -17,7 +17,7 @@ const Preset kPresets[3] = {
     { "Hard-tune",  0.0f, 100.0f,  0.0f },
 };
 
-constexpr int kKnobX = 196, kKnobW = 129, kKnobTop = 396;
+constexpr int kKnobX = 190, kKnobW = 111, kKnobTop = 396, kNumKnobs = 6;
 } // namespace
 
 HarmoniaEditor::HarmoniaEditor (HarmoniaProcessor& p)
@@ -44,6 +44,11 @@ HarmoniaEditor::HarmoniaEditor (HarmoniaProcessor& p)
                  "The notes your vocal is allowed to land on. Chromatic = every semitone (fixes pitch only).");
 
     detectButton.setTooltip ("Click, sing or play a phrase of the song, then click again - Harmonia picks the key for you.");
+    autoKeyButton.setClickingTogglesState (true);
+    autoKeyButton.setTooltip ("Follow the key of the vocal by itself, and change it when the song changes key. "
+                              "Works out the key from the singing, so give it a few seconds of vocal. Major/minor only.");
+    content.addAndMakeVisible (autoKeyButton);
+    autoKeyAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (proc.apvts, ids::autoKey, autoKeyButton);
     detectButton.onClick = [this] { onDetectClicked(); };
     content.addAndMakeVisible (detectButton);
 
@@ -77,9 +82,11 @@ HarmoniaEditor::HarmoniaEditor (HarmoniaProcessor& p)
                "How much correction is applied. 100% = fully on the note. Lower keeps more of your own pitch.");
     setupKnob (knobs[2], ids::natural, "NATURAL",
                "Keeps your own vibrato and expression. 100% = all of it. 0% = flattened onto the note.");
-    setupKnob (knobs[3], ids::formant, "FORMANT",
+    setupKnob (knobs[3], ids::hold, "NOTE HOLD",
+               "How long the voice has to stay near a new note before Harmonia moves to it. Higher stops the correction flickering to a wrong neighbouring note. 0 = switch at once.");
+    setupKnob (knobs[4], ids::formant, "FORMANT",
                "Changes the vocal character (throat size) without changing pitch. Leave at 0 for your natural voice.", true);
-    setupKnob (knobs[4], ids::tuning, "TUNING (A4)",
+    setupKnob (knobs[5], ids::tuning, "TUNING (A4)",
                "Reference pitch for A4. Change it if the song is not tuned to 440 Hz.");
 
     setResizable (true, true);
@@ -136,14 +143,15 @@ void HarmoniaEditor::resized()
 
     keyBox.setBounds (616, 110, 82, 28);
     scaleBox.setBounds (706, 110, 138, 28);
-    detectButton.setBounds (616, 148, 228, 32);
+    detectButton.setBounds (616, 148, 146, 32);
+    autoKeyButton.setBounds (770, 148, 74, 32);
     statusLabel.setBounds (616, 186, 228, 34);
     keyboard.setBounds (616, 226, 228, 100);
 
     for (int i = 0; i < 3; ++i)
         presetButtons[i].setBounds (36, 424 + i * 40, 130, 32);
 
-    for (int i = 0; i < 5; ++i)
+    for (int i = 0; i < kNumKnobs; ++i)
         knobs[i].slider.setBounds (kKnobX + i * kKnobW + 9, kKnobTop + 20, kKnobW - 18, 126);
 }
 
@@ -180,14 +188,14 @@ void HarmoniaEditor::paintContent (juce::Graphics& g)
     caption ("KEY & SCALE", 616, 86);
     g.setColour (theme::dim);
     g.setFont (theme::font (11.0f));
-    g.drawText ("Click keys to allow or block notes", 616, 332, 228, 28, juce::Justification::centredLeft);
+    g.drawText (keysLocked ? "The key follows your vocal" : "Click keys to allow or block notes", 616, 332, 228, 28, juce::Justification::centredLeft);
 
     card ({ 20.0f, 384.0f, 840.0f, 160.0f });
     caption ("STYLE", 36, 400);
     g.setColour (theme::panelEdge);
     g.fillRect (180.0f, 400.0f, 1.0f, 128.0f);
 
-    for (int i = 0; i < 5; ++i)
+    for (int i = 0; i < kNumKnobs; ++i)
     {
         g.setColour (theme::dim);
         g.setFont (theme::font (11.0f, true));
@@ -209,6 +217,10 @@ void HarmoniaEditor::setParam (const juce::String& id, float plainValue)
 
 void HarmoniaEditor::toggleNote (int pc)
 {
+    int root = 0;
+    bool minor = false;
+    if (proc.followedKey (root, minor)) // the key is being followed: the keys on screen are not editable
+        return;
     if (proc.scaleIndex() != kCustomScale)
     {
         // Start from what is currently lit, then switch to Custom so edits stick.
@@ -246,10 +258,20 @@ void HarmoniaEditor::onDetectClicked()
 
 void HarmoniaEditor::timerCallback()
 {
+    int followRoot = 0;
+    bool followMinor = false;
+    const bool autoKey = proc.paramValue (ids::autoKey) >= 0.5f;
+    const bool following = proc.followedKey (followRoot, followMinor);
     const bool usesRoot = scaleUsesRoot (proc.scaleIndex());
 
-    keyboard.setState (proc.currentNoteMask(), usesRoot ? (int) proc.paramValue (ids::key) : -1, graph.singingPitchClass());
-    keyBox.setEnabled (usesRoot);
+    keyboard.setState (proc.currentNoteMask(), following ? followRoot : (usesRoot ? (int) proc.paramValue (ids::key) : -1), graph.singingPitchClass());
+    if (following != keysLocked)
+    {
+        keysLocked = following;
+        content.repaint (616, 332, 228, 28);
+    }
+    keyBox.setEnabled (! autoKey && usesRoot);
+    scaleBox.setEnabled (! autoKey);
 
     // key detection feedback
     HarmoniaProcessor::KeyResult result;
@@ -269,12 +291,17 @@ void HarmoniaEditor::timerCallback()
 
     const bool listening = proc.learnState() == HarmoniaProcessor::LearnState::listening;
     detectButton.setToggleState (listening, juce::dontSendNotification);
-    detectButton.setButtonText (listening ? "Stop & detect key" : "Detect key from my vocal");
+    detectButton.setButtonText (listening ? "Stop & detect" : "Detect key");
+    detectButton.setEnabled (! autoKey);
     if (listening)
     {
         const float seconds = proc.learnedAmount() / (float) (proc.hopRateHz() * 0.85);
         statusLabel.setText ("Listening... " + juce::String (seconds, 1) + " s of singing heard. Click again when done.", juce::dontSendNotification);
     }
+    else if (autoKey)
+        statusLabel.setText (following ? "Following the key: " + juce::String (kNoteNames[followRoot]) + (followMinor ? " minor" : " major")
+                                       : juce::String ("Auto key: listening for the key. Play some vocal."),
+                             juce::dontSendNotification);
     else
         statusLabel.setText (detectedText, juce::dontSendNotification);
 

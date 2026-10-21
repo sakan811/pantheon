@@ -15,6 +15,7 @@ struct CorrectorParams
     float strength = 1.0f;      // 0..1, how much of the correction is applied
     float natural = 0.7f;       // 0..1, how much of the singer's own vibrato/drift is kept
     float refA4 = 440.0f;
+    float dwellMs = 70.0f;      // a new note must persist this long before it is adopted (0 = at once); undecided, the voice is left alone
 };
 
 // Works in cents-from-C-zero ("midi * 100") internally. Called once per analysis hop.
@@ -46,6 +47,7 @@ public:
         pendingCount = 0;
         tick = 0;
         switchTimer = 0.0f;
+        dwellTimer = 0.0f;
         ringCount = 0;
         centreCount = 0;
         centreSpeed = 0.0f;
@@ -163,13 +165,33 @@ public:
         // During vibrato the note only changes once the centre has clearly and durably moved on:
         // a swing that straddles a note boundary must not make the target flip back and forth.
         const float candidate = chooseTarget (center / 100.0f, p.noteMask, hysteresis);
+        bool undecided = false;
         if (candidate == target)
+        {
             switchTimer = 0.0f;
+            dwellTimer = 0.0f;
+        }
         else if (! vibrato || ! allowed ((int) std::lround (target), p.noteMask))
         {
-            target = candidate;
-            switchTimer = 0.0f;
-            confirmedTime = 0.0f;
+            // A brief excursion to a neighbouring note (a wobble, a blip of the detector) must not drag the
+            // voice there: until the new note has persisted, the singer is left as sung.
+            if (p.dwellMs > 0.0f && allowed ((int) std::lround (target), p.noteMask))
+            {
+                if (candidate != dwellCandidate)
+                {
+                    dwellCandidate = candidate;
+                    dwellTimer = 0.0f;
+                }
+                dwellTimer += dt;
+                undecided = dwellTimer * 1000.0f < p.dwellMs;
+            }
+            if (! undecided)
+            {
+                target = candidate;
+                switchTimer = 0.0f;
+                confirmedTime = 0.0f;
+                dwellTimer = 0.0f;
+            }
         }
         else
         {
@@ -186,6 +208,8 @@ public:
         float ct = (target * 100.0f - center) - (1.0f - p.natural) * dev;
         ct *= p.strength;
         ct = std::clamp (ct, -400.0f, 400.0f);
+        if (undecided)
+            ct = 0.0f;
 
         const float alpha = p.retuneMs <= 0.5f ? 1.0f : 1.0f - std::exp (-dt * 1000.0f / p.retuneMs);
         cs += alpha * (ct - cs);
@@ -200,6 +224,7 @@ public:
 
     float currentCorrectionCents() const { return cs; }
     float centreCents() const { return center; }
+    float centreSpeedCentsPerSec() const { return centreSpeed; }
 
 private:
     static bool allowed (int note, uint16_t mask)
@@ -423,7 +448,7 @@ private:
     float centreSpeed = 0.0f, confirmedTime = 0.0f;
 
     int64_t tick = 0;
-    float switchTimer = 0.0f;
+    float switchTimer = 0.0f, dwellTimer = 0.0f, dwellCandidate = 0.0f;
     bool vibrato = false;
     Extremum ext[4];
     int extCount = 0;

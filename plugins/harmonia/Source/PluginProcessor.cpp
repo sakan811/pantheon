@@ -55,12 +55,17 @@ juce::AudioProcessorValueTreeState::ParameterLayout HarmoniaProcessor::createLay
         juce::AudioParameterFloatAttributes().withLabel ("st")));
 
     layout.add (std::make_unique<AudioParameterFloat> (
+        ParameterID { ids::hold, 1 }, "Note Hold", NormalisableRange<float> (0.0f, 200.0f, 1.0f), 70.0f,
+        juce::AudioParameterFloatAttributes().withLabel ("ms")));
+
+    layout.add (std::make_unique<AudioParameterFloat> (
         ParameterID { ids::tuning, 1 }, "Tuning (A4)", NormalisableRange<float> (415.0f, 466.0f, 0.1f), 440.0f,
         juce::AudioParameterFloatAttributes().withLabel ("Hz")));
 
     layout.add (std::make_unique<AudioParameterChoice> (ParameterID { ids::range, 1 }, "Voice", namesOf (kVoiceRanges), 0));
 
     layout.add (std::make_unique<AudioParameterBool> (ParameterID { ids::bypass, 1 }, "Bypass", false));
+    layout.add (std::make_unique<AudioParameterBool> (ParameterID { ids::autoKey, 1 }, "Auto Key", false));
 
     return layout;
 }
@@ -78,9 +83,11 @@ HarmoniaProcessor::HarmoniaProcessor()
     pStrength = apvts.getRawParameterValue (ids::strength);
     pNatural = apvts.getRawParameterValue (ids::natural);
     pFormant = apvts.getRawParameterValue (ids::formant);
+    pHold = apvts.getRawParameterValue (ids::hold);
     pTuning = apvts.getRawParameterValue (ids::tuning);
     pRange = apvts.getRawParameterValue (ids::range);
     pBypass = apvts.getRawParameterValue (ids::bypass);
+    pAutoKey = apvts.getRawParameterValue (ids::autoKey);
     for (int i = 0; i < 12; ++i)
         pNote[i] = apvts.getRawParameterValue (ids::note (i));
 
@@ -96,8 +103,23 @@ bool HarmoniaProcessor::isBusesLayoutSupported (const BusesLayout& layouts) cons
     return in == juce::AudioChannelSet::mono() || in == juce::AudioChannelSet::stereo();
 }
 
+bool HarmoniaProcessor::followedKey (int& root, bool& minor) const
+{
+    if (pAutoKey->load() < 0.5f || ! prepared.load())
+        return false;
+    const auto k = engine->trackedKey();
+    root = k.root;
+    minor = k.minor;
+    return k.valid;
+}
+
 uint16_t HarmoniaProcessor::currentNoteMask() const
 {
+    int root = 0;
+    bool minor = false;
+    if (followedKey (root, minor))
+        return scaleMask (root, minor ? kMinorScale : kMajorScale);
+
     const int scale = scaleIndex();
     if (scale == kCustomScale)
     {
@@ -117,9 +139,11 @@ EngineParams HarmoniaProcessor::readParams() const
     p.corrector.retuneMs = pSpeed->load();
     p.corrector.strength = pStrength->load() * 0.01f;
     p.corrector.natural = pNatural->load() * 0.01f;
+    p.corrector.dwellMs = pHold->load();
     p.corrector.refA4 = pTuning->load();
     p.formantSemitones = pFormant->load();
     p.mix = pBypass->load() >= 0.5f ? 0.0f : 1.0f;
+    p.autoKey = pAutoKey->load() >= 0.5f;
     p.setVoiceRange ((int) pRange->load());
     return p;
 }

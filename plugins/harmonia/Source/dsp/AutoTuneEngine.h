@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Kernels.h"
+#include "KeyTracker.h"
 #include "PitchCorrector.h"
 #include "PitchDetector.h"
 #include "Rings.h"
@@ -37,6 +38,7 @@ struct EngineParams
     CorrectorParams corrector;
     float formantSemitones = 0.0f; // 0 keeps the singer's own vocal character
     float mix = 1.0f;              // 0 = dry (delayed), 1 = fully tuned
+    bool autoKey = false;          // follow the key of the vocal instead of corrector.noteMask (once it is known)
     float minHz = kVoiceRanges[0].minHz;
     float maxHz = kVoiceRanges[0].maxHz;
 
@@ -69,6 +71,7 @@ public:
         float outMidi = 0.0f;
         float targetMidi = 0.0f;
         float voiced = 0.0f;
+        float confidence = 0.0f; // detector certainty (0..1) for this hop
     };
     static constexpr int kHistory = 1024;
 
@@ -82,6 +85,7 @@ public:
 
         detector.prepare (fs, kLowestHz);
         corrector.prepare ((double) hop / fs);
+        keyTracker.prepare (fs / (double) hop); // not part of reset(): the key survives the host jumping around
 
         // Synthesis reads the input at most `latency` + two grains back; keep generous headroom.
         const int maxLag = detector.maxLagSamples();
@@ -137,6 +141,15 @@ public:
     int hopSamples() const { return hop; }
 
     void setParams (const EngineParams& p) { params = p; }
+
+    // What the corrector is actually snapping to right now (differs from the parameters under autoKey),
+    // and the key being followed. Safe to read from the UI thread.
+    uint16_t activeNoteMask() const { return (uint16_t) (liveState.load (std::memory_order_relaxed) & 0xFFFFu); }
+    KeyTracker::Result trackedKey() const
+    {
+        const uint32_t v = liveState.load (std::memory_order_relaxed);
+        return { (v & 0x10000u) != 0, (int) ((v >> 17) & 15u), (v & 0x200000u) != 0, 0.0f };
+    }
 
     // Key learning: collect the sung pitch classes, then ask for the best matching key.
     void startLearning()
@@ -315,7 +328,18 @@ private:
         const float period = inVoiced ? (det.voiced ? det.period : lastPeriod) : 0.0f;
         const float f0 = period > 0.0f ? (float) fs / period : 0.0f;
 
-        const auto out = corrector.process (inVoiced, f0, params.corrector);
+        CorrectorParams cp = params.corrector;
+        KeyTracker::Result followed;
+        if (params.autoKey)
+        {
+            followed = keyTracker.key();
+            if (followed.valid)
+                cp.noteMask = scaleMask (followed.root, followed.minor ? kMinorScale : kMajorScale);
+        }
+        liveState.store (cp.noteMask | (followed.valid ? 0x10000u : 0u) | ((uint32_t) followed.root << 17) | (followed.minor ? 0x200000u : 0u),
+                         std::memory_order_relaxed);
+
+        const auto out = corrector.process (inVoiced, f0, cp);
 
         // The estimate describes the middle of the analysed span: (window + period) / 2 ago.
         const double centerDelay = 0.5 * ((double) detector.windowSamples() + (period > 0.0f ? (double) period : fs / 200.0));
@@ -329,8 +353,11 @@ private:
 
         // UI history
         const int w = histWrite.load (std::memory_order_relaxed);
-        history[(size_t) (w & (kHistory - 1))] = { out.inMidi, out.outMidi, out.targetMidi, e.voiced ? 1.0f : 0.0f };
+        history[(size_t) (w & (kHistory - 1))] = { out.inMidi, out.outMidi, out.targetMidi, e.voiced ? 1.0f : 0.0f, det.voiced ? det.confidence : 0.0f };
         histWrite.store (w + 1, std::memory_order_release);
+
+        if (params.autoKey && e.voiced && det.voiced)
+            keyTracker.push (corrector.centreCents() / 100.0f, det.confidence, corrector.centreSpeedCentsPerSec());
 
         if (learning && e.voiced)
             chroma[(size_t) pitchClass ((int) std::lround (out.inMidi))] += std::max (0.0f, det.confidence - 0.5f) * 2.0f;
@@ -581,6 +608,8 @@ private:
 
     bool learning = false;
     std::array<float, 12> chroma {};
+    KeyTracker keyTracker;
+    std::atomic<uint32_t> liveState { 0 }; // active note mask | followed key (valid, root, minor)
 
     std::array<HopInfo, kHistory> history {};
     std::atomic<int> histWrite { 0 };

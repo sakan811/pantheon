@@ -58,14 +58,15 @@ private:
     PitchGraph graph;
     NoteKeyboard keyboard;
     juce::ComboBox rangeBox, keyBox, scaleBox;
-    juce::TextButton bypassButton { "Bypass" }, detectButton { "Detect key from my vocal" };
+    juce::TextButton bypassButton { "Bypass" }, detectButton { "Detect key" }, autoKeyButton { "Auto key" };
     juce::TextButton presetButtons[3];
     juce::Label statusLabel;
-    Knob knobs[5];
+    Knob knobs[6];
 
     std::unique_ptr<ComboAttachment> rangeAtt, keyAtt, scaleAtt;
-    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> bypassAtt;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> bypassAtt, autoKeyAtt;
 
+    bool keysLocked = false; // the key follows the vocal: the piano keys cannot be edited
     bool awaitingKeyResult = false;
     juce::uint32 finishClickedAt = 0;
     juce::String detectedText, subtitle;

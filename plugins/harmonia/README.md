@@ -2,6 +2,8 @@
 
 Natural-sounding pitch correction for solo vocals. VST3 + AudioUnit, universal (Apple Silicon + Intel).
 
+![Harmonia](docs/screenshot.png)
+
 ## Using it in FL Studio
 
 1. Build/install (already done once): `scripts/build.sh`. This copies the plug-ins to
@@ -20,10 +22,12 @@ Harmonia while recording, you will hear that delay: record dry and add Harmonia 
 | Control | What it does |
 | --- | --- |
 | **Key / Scale** | Notes the voice may land on. Click piano keys to allow/block individual notes (switches to *Custom*). |
-| **Detect key** | Listens to your vocal and sets key + major/minor for you. |
+| **Detect key** | Listens to your vocal and sets key + major/minor for you, once. |
+| **Auto key** | Keeps following the key of the vocal and changes it when the song modulates or a new section starts. Major/minor only; it needs about 6 s of singing before it commits, and takes about 4 s to follow a key change. Key and Scale are ignored while it is on (they still apply until the key is known). Automatable. |
 | **Speed** | How fast the voice is pulled onto the note. *Instant* = robotic. 20–60 ms is transparent. |
 | **Strength** | Amount of correction. 100 % = fully on the note; lower keeps more of your own pitch. |
 | **Natural** | Keeps your own vibrato and expression. 100 % = all of it, 0 % = flattened onto the note. |
+| **Note Hold** | How long the voice has to stay near a new note before Harmonia moves to it (default 70 ms). Stops the correction flickering to a wrong neighbouring note; a real note change is delayed by about that long. 0 = switch at once. Automatable. |
 | **Formant** | Shifts vocal character without changing pitch. Leave at 0 to keep your own voice. |
 | **Tuning (A4)** | Reference pitch, for songs not tuned to 440 Hz. |
 | **Voice** | Bass/baritone, tenor/alto, soprano or Auto. Narrows the pitch search: faster, never jumps an octave. |
@@ -58,6 +62,12 @@ allowed notes.
 * **Re-synthesis** ([AutoTuneEngine.h](Source/dsp/AutoTuneEngine.h)): pitch-synchronous overlap-add (PSOLA) with sub-sample
   analysis marks. Grains are re-spaced, not resampled, so formants (the voice colour) stay where they were.
   Consonants and breaths (unvoiced) pass through untouched.
+* **Note hold** (`dwellMs` in [PitchCorrector.h](Source/dsp/PitchCorrector.h)): a new target note has to persist for the hold time before it
+  is adopted. While it is undecided the singer is left as sung, so a wobble or detector blip is not dragged to the neighbouring
+  note. On the Earth Angel stem this cut brief (<120 ms) note flickers from 134 to 36.
+* **Auto key** ([KeyTracker.h](Source/dsp/KeyTracker.h)): a pitch-class histogram of the sung notes that forgets over ~12 s of singing,
+  matched against the major/minor key profiles. Glides and notes that sit between two semitones count for less. The followed key
+  only changes when another key has beaten it by a clear margin for 4 s, so passing notes and drift do not move it.
 * A fixed 46 ms look-ahead means the pitch track is known before the audio is re-synthesised.
 
 ## Building
@@ -85,6 +95,9 @@ build-tools/pitch_track in.wav track.csv
 # synthetic stress scenarios for the corrector: huge vibrato, drift, sagging notes (--csv dir writes the contours)
 build-tools/stress_corrector
 
+# follow the key of a WAV by itself (prints when it changes)
+build-tools/tune_wav in.wav out.wav --autokey 1
+
 # run a WAV through the real plug-in processor (bit-identical to tune_wav at equal settings)
 build/HarmoniaDevTool_artefacts/Release/HarmoniaDevTool process in.wav out.wav 0 0
 
@@ -104,7 +117,7 @@ build/HarmoniaDevTool_artefacts/Release/HarmoniaDevTool snapshot ui.png
 ## Layout
 
 ```
-Source/dsp/        JUCE-free engine: Scales, PitchDetector, PitchCorrector, AutoTuneEngine,
+Source/dsp/        JUCE-free engine: Scales, KeyTracker, PitchDetector, PitchCorrector, AutoTuneEngine,
                    Kernels (SIMD-friendly sums), Rings (history buffers)
 Source/            PluginProcessor (parameters, host glue), PluginEditor
 Source/ui/         Theme/look-and-feel, PitchGraph, NoteKeyboard

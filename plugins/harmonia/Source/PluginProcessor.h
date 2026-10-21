@@ -14,9 +14,11 @@ inline constexpr const char* speed = "speed";
 inline constexpr const char* strength = "strength";
 inline constexpr const char* natural = "natural";
 inline constexpr const char* formant = "formant";
+inline constexpr const char* hold = "hold";
 inline constexpr const char* tuning = "tuning";
 inline constexpr const char* range = "range";
 inline constexpr const char* bypass = "bypass";
+inline constexpr const char* autoKey = "autokey";
 inline juce::String note (int pitchClass) { return "note" + juce::String (pitchClass); }
 } // namespace ids
 
@@ -59,8 +61,10 @@ public:
 
     // ---- shared with the editor ----
     // Notes the tuner is currently allowed to land on (bit 0 = C): the selected key and scale,
-    // or the custom note switches for the "Custom" scale.
+    // or the custom note switches for the "Custom" scale. With Auto Key on, the key being followed.
     uint16_t currentNoteMask() const;
+    // The key the vocal is being followed in, when Auto Key is on and the key is known.
+    bool followedKey (int& root, bool& minor) const;
     int scaleIndex() const { return (int) pScale->load(); }
     float paramValue (const juce::String& id) const { return apvts.getRawParameterValue (id)->load(); }
 
@@ -102,9 +106,11 @@ private:
     std::atomic<float>* pStrength = nullptr;
     std::atomic<float>* pNatural = nullptr;
     std::atomic<float>* pFormant = nullptr;
+    std::atomic<float>* pHold = nullptr;
     std::atomic<float>* pTuning = nullptr;
     std::atomic<float>* pRange = nullptr;
     std::atomic<float>* pBypass = nullptr;
+    std::atomic<float>* pAutoKey = nullptr;
     std::atomic<float>* pNote[12] {};
 
     std::atomic<int> learnCommand { 0 };

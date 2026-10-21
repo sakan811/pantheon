@@ -84,39 +84,42 @@ struct KeyGuess
 };
 
 // Krumhansl-Schmuckler key finding on a 12-bin pitch-class histogram.
-inline KeyGuess guessKey (const float* hist)
+// Pearson correlation (-1..1) of the histogram with the major or minor profile placed on `root`.
+inline float keyCorrelation (const float* hist, int root, bool minor)
 {
     static const float major[12] = { 6.35f, 2.23f, 3.48f, 2.33f, 4.38f, 4.09f, 2.52f, 5.19f, 2.39f, 3.66f, 2.29f, 2.88f };
-    static const float minor[12] = { 6.33f, 2.68f, 3.52f, 5.38f, 2.60f, 3.53f, 2.54f, 4.75f, 3.98f, 2.69f, 3.34f, 3.17f };
+    static const float minorProfile[12] = { 6.33f, 2.68f, 3.52f, 5.38f, 2.60f, 3.53f, 2.54f, 4.75f, 3.98f, 2.69f, 3.34f, 3.17f };
+    const float* prof = minor ? minorProfile : major;
 
-    float meanH = 0.0f;
+    float meanH = 0.0f, meanP = 0.0f;
     for (int i = 0; i < 12; ++i)
+    {
         meanH += hist[i];
+        meanP += prof[i];
+    }
     meanH /= 12.0f;
+    meanP /= 12.0f;
 
+    float num = 0.0f, dh = 0.0f, dp = 0.0f;
+    for (int i = 0; i < 12; ++i)
+    {
+        const float h = hist[(i + root) % 12] - meanH;
+        const float p = prof[i] - meanP;
+        num += h * p;
+        dh += h * h;
+        dp += p * p;
+    }
+    return (dh > 0.0f && dp > 0.0f) ? num / std::sqrt (dh * dp) : 0.0f;
+}
+
+inline KeyGuess guessKey (const float* hist)
+{
     KeyGuess best;
     best.score = -2.0f;
-
     for (int mode = 0; mode < 2; ++mode)
-    {
-        const float* prof = mode == 0 ? major : minor;
-        float meanP = 0.0f;
-        for (int i = 0; i < 12; ++i)
-            meanP += prof[i];
-        meanP /= 12.0f;
-
         for (int root = 0; root < 12; ++root)
         {
-            float num = 0.0f, dh = 0.0f, dp = 0.0f;
-            for (int i = 0; i < 12; ++i)
-            {
-                const float h = hist[(i + root) % 12] - meanH;
-                const float p = prof[i] - meanP;
-                num += h * p;
-                dh += h * h;
-                dp += p * p;
-            }
-            const float r = (dh > 0.0f && dp > 0.0f) ? num / std::sqrt (dh * dp) : 0.0f;
+            const float r = keyCorrelation (hist, root, mode == 1);
             if (r > best.score)
             {
                 best.score = r;
@@ -124,7 +127,6 @@ inline KeyGuess guessKey (const float* hist)
                 best.minor = (mode == 1);
             }
         }
-    }
     return best;
 }
 } // namespace harmonia

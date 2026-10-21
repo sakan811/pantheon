@@ -542,6 +542,106 @@ int main()
         check (l == r, "identical stereo channels stay identical", 0);
     }
 
+    // ------------------------------------------------------------------ 7d2. Note hold
+    std::printf ("7d2. Note hold: a brief excursion is not followed, a real note change still is\n");
+    {
+        auto run = [&] (float dwellMs, double blipSeconds, double toMidi, int& targetChanges, double& followedAt) {
+            harmonia::PitchCorrector pc;
+            pc.prepare (0.004);
+            harmonia::CorrectorParams cp;
+            cp.noteMask = chromatic;
+            cp.dwellMs = dwellMs;
+            cp.retuneMs = 40.0f;
+            targetChanges = 0;
+            followedAt = -1.0;
+            float last = -1.0f;
+            const double tStep = 1.0, tEnd = tStep + blipSeconds;
+            for (double t = 0.0; t < 2.5; t += 0.004)
+            {
+                double midi = 60.2 + 0.05 * std::sin (2.0 * kPi * 4.0 * t);
+                if (t >= tStep && t < tEnd)
+                    midi = toMidi;
+                else if (t >= tEnd && blipSeconds > 1.0)
+                    midi = toMidi;
+                const auto o = pc.process (true, (float) midiToHz (midi), cp);
+                if (t > 0.5 && last >= 0.0f && o.targetMidi != last)
+                    ++targetChanges;
+                if (followedAt < 0.0 && t >= tStep && std::fabs (o.targetMidi - toMidi) < 0.6)
+                    followedAt = t - tStep;
+                last = o.targetMidi;
+            }
+        };
+        int changes = 0;
+        double at = 0.0;
+        run (70.0f, 0.045, 61.3, changes, at);
+        check (changes == 0, "a 45 ms excursion a semitone away is ignored (hold 70 ms)", changes);
+        run (0.0f, 0.045, 61.3, changes, at);
+        check (changes > 0, "(without hold the same excursion does move the target)", changes);
+        run (70.0f, 5.0, 64.0, changes, at);
+        check (at >= 0.0 && at < 0.35, "a real change to a new note is followed within 350 ms", at * 1000.0, "ms");
+        double atNoHold = 0.0;
+        run (0.0f, 5.0, 64.0, changes, atNoHold);
+        check (at - atNoHold < 0.1, "hold delays a real note change by under 100 ms", (at - atNoHold) * 1000.0, "ms");
+    }
+
+    // ------------------------------------------------------------------ 7e. Auto key
+    std::printf ("7e. Auto key: finds the key by itself, ignores passing notes, follows a modulation\n");
+    {
+        // A tune that circles around its tonic; `shift` transposes it. The singer is a little off: +-20 cents.
+        const int tune[] = { 0, 2, 4, 2, 4, 5, 7, 5, 4, 2, 0, 2, 4, 7, 4, 2, 0, -1, 0, 2, 4, 5, 4, 2, 0 };
+        const int numTune = (int) (sizeof (tune) / sizeof (tune[0]));
+        auto note = [&] (double t, int shift) {
+            const int i = (int) (t / 0.35) % numTune;
+            const int pc = (tune[i] % 12 + 12) % 12;
+            const double detune = ((i * 7) % 5 - 2) * 0.10;
+            return midiToHz (60.0 + shift + (tune[i] < 0 ? tune[i] : pc) + detune);
+        };
+        const double sectionA = 24.0, sectionB = 30.0;
+        auto in = makeVoice (fs, sectionA + sectionB, [&] (double t) { return t < sectionA ? note (t, 0) : note (t - sectionA, 6); });
+
+        EngineParams p = makeParams (chromatic, 30.0f, 0.6f);
+        p.autoKey = true;
+        AutoTuneEngine eng;
+        eng.prepare (fs, 1);
+        eng.setParams (p);
+        check (eng.activeNoteMask() == chromatic, "before it knows the key the chosen notes are used", eng.activeNoteMask());
+
+        uint16_t beforeMod = 0, early = 0, end = 0;
+        int firstKeyAt = -1;
+        auto out = in;
+        for (size_t pos = 0; pos + 480 <= out.size(); pos += 480)
+        {
+            float* ch[1] = { out.data() + pos };
+            eng.process (ch, 1, 480);
+            const double t = (double) (pos + 480) / fs;
+            if (firstKeyAt < 0 && eng.trackedKey().valid)
+                firstKeyAt = (int) t;
+            if (t > 9.0 && t < 9.1)
+                early = eng.activeNoteMask();
+            if (t > sectionA - 0.1 && t < sectionA)
+                beforeMod = eng.activeNoteMask();
+        }
+        end = eng.activeNoteMask();
+
+        const uint16_t cMajor = harmonia::scaleMask (0, harmonia::kMajorScale);
+        const uint16_t fsMajor = harmonia::scaleMask (6, harmonia::kMajorScale);
+        check (firstKeyAt >= 0 && firstKeyAt <= 8, "key known within 8 s of singing", firstKeyAt, "s");
+        check (early == cMajor, "section 1 is C major (despite the chromatic passing note)", early);
+        check (beforeMod == cMajor, "still C major at the end of section 1", beforeMod);
+        check (end == fsMajor, "follows the modulation to F# major", end);
+
+        AutoTuneEngine manual;
+        manual.prepare (fs, 1);
+        manual.setParams (makeParams (cMajor, 30.0f, 0.6f)); // autoKey off
+        auto copy = in;
+        for (size_t pos = 0; pos + 480 <= copy.size(); pos += 480)
+        {
+            float* ch[1] = { copy.data() + pos };
+            manual.process (ch, 1, 480);
+        }
+        check (manual.activeNoteMask() == cMajor && ! manual.trackedKey().valid, "auto key off: the chosen notes stay in force", manual.activeNoteMask());
+    }
+
     // ------------------------------------------------------------------ 8. CPU
     std::printf ("8. CPU cost\n");
     {
