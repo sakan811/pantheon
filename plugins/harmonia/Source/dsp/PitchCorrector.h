@@ -44,11 +44,19 @@ public:
         med[0] = med[1] = med[2] = 0.0f;
         medCount = 0;
         pendingCount = 0;
+        tick = 0;
+        switchTimer = 0.0f;
+        resetVibrato (0.0f);
     }
+
+    // True while the singer's pitch is oscillating like a vibrato (note target is held steady).
+    bool vibratoActive() const { return vibrato; }
 
     Output process (bool voiced, float f0, const CorrectorParams& p)
     {
         Output out;
+
+        ++tick;
 
         if (! voiced || f0 <= 0.0f)
         {
@@ -103,20 +111,52 @@ public:
             pendingCount = 0;
             center = x;
             target = nearestAllowed (x / 100.0f, p.noteMask);
+            switchTimer = 0.0f;
+            resetVibrato (x);
         }
         else
         {
-            // "Centre" of the sung note: a slow average (vibrato averages out). It speeds
-            // up when the voice moves further than a vibrato would, so that real note
-            // changes are recognised quickly.
-            const float away = std::clamp ((std::fabs (x - center) - 20.0f) / 30.0f, 0.0f, 1.0f);
-            const float tau = 0.07f + away * (0.02f - 0.07f);
-            center += (1.0f - std::exp (-dt / tau)) * (x - center);
-            const float band = 45.0f;
-            center = std::clamp (center, x - band, x + band);
+            trackVibrato (x);
+
+            if (vibrato)
+            {
+                // Vibrato: the centre is the middle of the swings, which does not depend on where
+                // in the cycle we are. The fast "follow the voice" shortcuts below would just
+                // chase the oscillation, so they are off.
+                center += (1.0f - std::exp (-dt / 0.05f)) * (vibCentre - center);
+            }
+            else
+            {
+                // "Centre" of the sung note: a slow average (vibrato averages out). It speeds
+                // up when the voice moves further than a vibrato would, so that real note
+                // changes are recognised quickly.
+                const float away = std::clamp ((std::fabs (x - center) - 20.0f) / 30.0f, 0.0f, 1.0f);
+                const float tau = 0.07f + away * (0.02f - 0.07f);
+                center += (1.0f - std::exp (-dt / tau)) * (x - center);
+                const float band = 45.0f;
+                center = std::clamp (center, x - band, x + band);
+            }
         }
 
-        updateTarget (center / 100.0f, p.noteMask);
+        // During vibrato the note only changes once the centre has clearly and durably moved on:
+        // a swing that straddles a note boundary must not make the target flip back and forth.
+        const float candidate = chooseTarget (center / 100.0f, p.noteMask, vibrato ? 0.25f : 0.10f);
+        if (candidate == target)
+            switchTimer = 0.0f;
+        else if (! vibrato || ! allowed ((int) std::lround (target), p.noteMask))
+        {
+            target = candidate;
+            switchTimer = 0.0f;
+        }
+        else
+        {
+            switchTimer += dt;
+            if (switchTimer >= 0.08f)
+            {
+                target = candidate;
+                switchTimer = 0.0f;
+            }
+        }
 
         const float dev = x - center;
         float ct = (target * 100.0f - center) - (1.0f - p.natural) * dev;
@@ -166,37 +206,131 @@ private:
         return best;
     }
 
-    // Move to a new note only once the pitch is clearly past the halfway point.
-    void updateTarget (float c, uint16_t mask)
+    // The note to aim at for a sung centre `c`: the current target, or a neighbour once `c` is
+    // clearly past the halfway point (by `hysteresis` semitones).
+    float chooseTarget (float c, uint16_t mask, float hysteresis) const
     {
         if (! anyAllowed (mask))
-        {
-            target = c;
-            return;
-        }
-        if (! allowed ((int) std::lround (target), mask))
-        {
-            target = nearestAllowed (c, mask);
-            return;
-        }
+            return c;
+        float t = target;
+        if (! allowed ((int) std::lround (t), mask))
+            return nearestAllowed (c, mask);
 
-        const float hysteresis = 0.10f;
         for (int iter = 0; iter < 6; ++iter)
         {
-            int hi = (int) std::lround (target) + 1;
+            int hi = (int) std::lround (t) + 1;
             while (! allowed (hi, mask))
                 ++hi;
-            int lo = (int) std::lround (target) - 1;
+            int lo = (int) std::lround (t) - 1;
             while (! allowed (lo, mask))
                 --lo;
 
-            if (c > 0.5f * (target + (float) hi) + hysteresis)
-                target = (float) hi;
-            else if (c < 0.5f * (target + (float) lo) - hysteresis)
-                target = (float) lo;
+            if (c > 0.5f * (t + (float) hi) + hysteresis)
+                t = (float) hi;
+            else if (c < 0.5f * (t + (float) lo) - hysteresis)
+                t = (float) lo;
             else
                 break;
         }
+        return t;
+    }
+
+    // ---- vibrato detection ----
+    // Follows the pitch with a zig-zag filter: a peak/trough is recorded once the pitch has turned
+    // by more than `kTurn` cents. Four consecutive, alternating extrema that are evenly spaced
+    // (3-10 Hz) and of similar size make a vibrato.
+    struct Extremum
+    {
+        float v = 0.0f;
+        int64_t tick = 0;
+    };
+
+    void resetVibrato (float x)
+    {
+        vibrato = false;
+        extCount = 0;
+        runVal = x;
+        runTick = tick;
+        runDir = 1;
+    }
+
+    void pushExtremum (float v, int64_t t)
+    {
+        if (extCount == 4)
+        {
+            for (int i = 0; i < 3; ++i)
+                ext[i] = ext[i + 1];
+            extCount = 3;
+        }
+        ext[extCount++] = { v, t };
+
+        vibrato = false;
+        if (extCount < 4)
+            return;
+
+        float sMin = 1e9f, sMax = 0.0f, hMin = 1e9f, hMax = 0.0f;
+        for (int i = 1; i < 4; ++i)
+        {
+            const float s = std::fabs (ext[i].v - ext[i - 1].v);
+            const float h = (float) (ext[i].tick - ext[i - 1].tick) * dt;
+            sMin = std::min (sMin, s);
+            sMax = std::max (sMax, s);
+            hMin = std::min (hMin, h);
+            hMax = std::max (hMax, h);
+        }
+        if (hMin >= 0.05f && hMax <= 0.20f && sMin >= 24.0f && sMax <= 220.0f && sMax <= 2.2f * sMin && hMax <= 1.8f * hMin)
+        {
+            vibrato = true;
+            vibSwingMax = sMax;
+            vibHalfPeriod = 0.5f * (hMin + hMax);
+            vibCentre = 0.25f * (ext[1].v + 2.0f * ext[2].v + ext[3].v);
+        }
+    }
+
+    void trackVibrato (float x)
+    {
+        constexpr float kTurn = 12.0f;
+        if (runDir > 0)
+        {
+            if (x >= runVal)
+            {
+                runVal = x;
+                runTick = tick;
+            }
+            else if (runVal - x > kTurn)
+            {
+                pushExtremum (runVal, runTick);
+                runDir = -1;
+                runVal = x;
+                runTick = tick;
+            }
+        }
+        else
+        {
+            if (x <= runVal)
+            {
+                runVal = x;
+                runTick = tick;
+            }
+            else if (x - runVal > kTurn)
+            {
+                pushExtremum (runVal, runTick);
+                runDir = 1;
+                runVal = x;
+                runTick = tick;
+            }
+        }
+
+        if (! vibrato)
+            return;
+
+        // The oscillation has stopped, or the voice has gone further from the centre than any
+        // swing so far: a real note change. Back to fast tracking.
+        const float sinceExtremum = (float) (tick - ext[extCount - 1].tick) * dt;
+        const bool stale = sinceExtremum > std::max (0.22f, 1.7f * vibHalfPeriod);
+        const bool leapt = std::fabs (x - center) > 0.75f * vibSwingMax + 25.0f;
+        if (stale || leapt)
+            resetVibrato (x);
     }
 
     float dt = 0.004f;
@@ -206,5 +340,14 @@ private:
     int medCount = 0;
     float lastX = 0.0f, pendingX = 0.0f;
     int pendingCount = 0;
+
+    int64_t tick = 0;
+    float switchTimer = 0.0f;
+    bool vibrato = false;
+    Extremum ext[4];
+    int extCount = 0;
+    float runVal = 0.0f, vibCentre = 0.0f, vibSwingMax = 0.0f, vibHalfPeriod = 0.1f;
+    int64_t runTick = 0;
+    int runDir = 1;
 };
 } // namespace harmonia

@@ -79,6 +79,153 @@ int main()
         }
     }
 
+    // ------------------------------------------------------------------ 2b. vibrato straddling a note boundary
+    std::printf ("2b. Wide vibrato centred on the boundary between two notes must not flip the target\n");
+    {
+        struct Result { int flips = 0; double outDepth = 0, outMean = 0; };
+        // Drives the corrector with a synthetic f0 contour (4 ms hops); midiAt(t) is the sung pitch.
+        auto drive = [] (const std::function<double (double)>& midiAt, double seconds, const harmonia::CorrectorParams& cp,
+                         double settle, std::vector<double>* targets = nullptr) {
+            harmonia::PitchCorrector pc;
+            pc.prepare (0.004);
+            std::mt19937 rng (7);
+            std::normal_distribution<double> nd (0.0, 1.0);
+            Result r;
+            std::vector<double> outs;
+            float lastTarget = -1.0f;
+            for (double t = 0.0; t < seconds; t += 0.004)
+            {
+                const double m = midiAt (t) + 0.03 * nd (rng); // 3 cents of detector/voice jitter
+                const auto o = pc.process (true, (float) midiToHz (m), cp);
+                if (targets)
+                    targets->push_back (o.targetMidi);
+                if (t >= settle)
+                {
+                    if (lastTarget >= 0.0f && o.targetMidi != lastTarget)
+                        ++r.flips;
+                    outs.push_back (o.outMidi * 100.0);
+                }
+                lastTarget = o.targetMidi;
+            }
+            const auto s = stats (outs);
+            r.outDepth = s.stddev;
+            r.outMean = s.mean;
+            return r;
+        };
+
+        struct Case { const char* name; uint16_t mask; double centre, depth, rate; };
+        const Case cases[] = {
+            { "chromatic, +-50c @5.5Hz on C4/C#4 boundary", chromatic, 60.50, 0.50, 5.5 },
+            { "chromatic, +-70c @6.5Hz on C4/C#4 boundary", chromatic, 60.50, 0.70, 6.5 },
+            { "chromatic, +-35c @4.5Hz slightly past boundary", chromatic, 60.56, 0.35, 4.5 },
+            { "C major, +-90c @5Hz on D4/E4 boundary", 0x0AB5, 63.00, 0.90, 5.0 },
+        };
+        for (auto& c : cases)
+        {
+            harmonia::CorrectorParams cp;
+            cp.noteMask = c.mask;
+            cp.retuneMs = 40.0f;
+            cp.natural = 1.0f;
+            auto contour = [&] (double t) { return c.centre + c.depth * std::sin (2.0 * kPi * c.rate * t); };
+            const auto r = drive (contour, 4.0, cp, 0.6);
+            char label[128];
+            std::snprintf (label, sizeof label, "%s: target flips", c.name);
+            check (r.flips == 0, label, r.flips);
+            // natural 100%: the vibrato itself should survive (not be chopped up by flips).
+            const double inDepth = c.depth * 100.0 / std::sqrt (2.0);
+            std::snprintf (label, sizeof label, "%s: depth kept", c.name);
+            check (r.outDepth > 0.6 * inDepth && r.outDepth < 1.3 * inDepth, label, r.outDepth / inDepth);
+        }
+
+        // The same, at natural 0: the output must be (nearly) a single flat note, not jumping between two.
+        {
+            harmonia::CorrectorParams cp;
+            cp.retuneMs = 0.0f;
+            cp.natural = 0.0f;
+            auto contour = [] (double t) { return 60.50 + 0.50 * std::sin (2.0 * kPi * 5.5 * t); };
+            const auto r = drive (contour, 4.0, cp, 0.6);
+            check (r.flips == 0, "natural 0%, hard: target flips", r.flips);
+            check (r.outDepth < 20.0, "natural 0%, hard: output wobble (stddev)", r.outDepth, "cents");
+        }
+
+        // Vibrato that fades in, with a drifting rate, on a held note at a boundary.
+        {
+            harmonia::CorrectorParams cp;
+            cp.retuneMs = 40.0f;
+            cp.natural = 1.0f;
+            auto contour = [] (double t) {
+                const double depth = 0.55 * std::clamp (t / 1.0, 0.0, 1.0);
+                const double phase = 2.0 * kPi * (4.5 * t + 0.4 * t * t); // 4.5 -> ~6.1 Hz over 2 s
+                return 60.50 + depth * std::sin (phase);
+            };
+            const auto r = drive (contour, 4.0, cp, 1.4);
+            check (r.flips == 0, "fade-in vibrato with drifting rate: target flips", r.flips);
+        }
+
+        // A slow slide through vibrato (portamento) must arrive at the new note without dithering.
+        {
+            harmonia::CorrectorParams cp;
+            cp.retuneMs = 40.0f;
+            cp.natural = 0.7f;
+            auto contour = [] (double t) {
+                const double slide = std::clamp ((t - 1.5) / 0.5, 0.0, 1.0); // C4 -> D4 over 0.5 s
+                return 60.0 + 2.0 * slide + 0.40 * std::sin (2.0 * kPi * 5.5 * t);
+            };
+            std::vector<double> targets;
+            const auto r = drive (contour, 3.5, cp, 0.0, &targets);
+            check (r.flips <= 2 && std::fabs (targets.back() - 62.0) < 0.01, "portamento C4 -> D4 under vibrato: target changes (<= 2)", r.flips);
+        }
+
+        // End to end through the real engine: the rendered output keeps the vibrato around ONE note.
+        {
+            auto f0 = [] (double t) { return midiToHz (60.50 + 0.50 * std::sin (2.0 * kPi * 5.5 * t)); };
+            auto in = makeVoice (fs, 4.0, f0);
+            AutoTuneEngine eng;
+            eng.prepare (fs, 1);
+            eng.setParams (makeParams (chromatic, 40.0f, 1.0f));
+            auto out = runEngine (eng, in);
+            auto ps = measurePitch (out, fs);
+            auto sm = stats (centsVs (ps, 1.0 + eng.latencySamples() / fs, 3.6, 60.0));
+            auto sIn = stats (centsVs (measurePitch (in, fs), 1.0, 3.6, 60.0));
+            const double nearest = std::fabs (sm.mean) < std::fabs (sm.mean - 100.0) ? 0.0 : 100.0;
+            check (std::fabs (sm.mean - nearest) < 10.0, "engine: output centred on a single note (mean vs C4 or C#4)", sm.mean - nearest, "cents");
+            check (sm.stddev > 0.8 * sIn.stddev && sm.stddev < 1.25 * sIn.stddev, "engine: vibrato depth kept (out/in)", sm.stddev / sIn.stddev);
+        }
+
+        // Real note changes must still be recognised quickly, vibrato or not.
+        struct Step { const char* name; double from, to, depth; };
+        const Step steps[] = {
+            { "C4 -> E4, +-40c vibrato", 60.0, 64.0, 0.40 },
+            { "C4 -> D4, +-40c vibrato", 60.0, 62.0, 0.40 },
+            { "C4 -> C#4, +-30c vibrato", 60.0, 61.0, 0.30 },
+            { "C4 -> D4, no vibrato", 60.0, 62.0, 0.0 },
+        };
+        for (auto& s : steps)
+        {
+            harmonia::CorrectorParams cp;
+            cp.retuneMs = 40.0f;
+            cp.natural = 0.7f;
+            const double tStep = 1.5;
+            auto contour = [&] (double t) {
+                // a fast 40 ms slide between the notes, as a singer would do
+                const double slide = std::clamp ((t - tStep) / 0.04, 0.0, 1.0);
+                return s.from + (s.to - s.from) * slide + s.depth * std::sin (2.0 * kPi * 5.5 * t);
+            };
+            std::vector<double> targets;
+            drive (contour, 3.0, cp, 0.0, &targets);
+            double tReach = -1.0;
+            for (size_t i = 0; i < targets.size(); ++i)
+                if (i * 0.004 > tStep && std::fabs (targets[i] - s.to) < 0.01) { tReach = (double) i * 0.004 - tStep; break; }
+            int wrongLate = 0; // after settling, the target must be exactly the new note
+            for (size_t i = 0; i < targets.size(); ++i)
+                if (i * 0.004 > tStep + 0.5 && std::fabs (targets[i] - s.to) > 0.01)
+                    ++wrongLate;
+            char label[128];
+            std::snprintf (label, sizeof label, "%s: seconds until new target", s.name);
+            check (tReach >= 0.0 && tReach < 0.22 && wrongLate == 0, label, tReach);
+        }
+    }
+
     // ------------------------------------------------------------------ 3. melody with gaps
     std::printf ("3. Melody A3 +30c, C4 -25c, E4 +20c, G3 +40c with breath gaps (C major)\n");
     {
