@@ -25,8 +25,15 @@ public:
         themis::BandArray f {};
         const bool haveFoldNow = proc.readMonoFold (f);
         const int dev = static_cast<int> (proc.paramReader.value (params::device));
+        themis::PhaseBands ph {};
+        const bool havePhaseNow = proc.readPhase (ph);
+        float hz = 0.0f, tilt = 0.0f;
+        bool noHarmonics = false;
+        latestFundamental (hz, tilt, noHarmonics);
 
-        const bool changed = have != haveData || haveFoldNow != haveFold || (haveFoldNow && differs (f, fold)) || dev != deviceIndex || (have && differs (m, measured)) || haveCrestNow != haveCrest
+        const bool changed = have != haveData || havePhaseNow != havePhase || (havePhaseNow && differs (ph, phaseBands)) || differs (hz, fundamentalHz)
+                             || differs (tilt, fundamentalTiltDb) || noHarmonics != noFundamentalHarmonics
+                             || haveFoldNow != haveFold || (haveFoldNow && differs (f, fold)) || dev != deviceIndex || (have && differs (m, measured)) || haveCrestNow != haveCrest
                              || (haveCrestNow && differs (crest, lowCrestDb)) || t.name != target.name
                              || differs (t.medianDb, target.medianDb) || differs (t.halfWidthDb, target.halfWidthDb)
                              || differs (tol, tolerance) || differs (rate, fs);
@@ -42,6 +49,12 @@ public:
             measured = m;
         if (haveFoldNow)
             fold = f;
+        havePhase = havePhaseNow;
+        if (havePhaseNow)
+            phaseBands = ph;
+        fundamentalHz = hz;
+        fundamentalTiltDb = tilt;
+        noFundamentalHarmonics = noHarmonics;
         target = std::move (t);
         tolerance = tol;
         fs = rate;
@@ -51,6 +64,7 @@ public:
         if (device != nullptr)
             device->usableRangeHz (themis::translation::kRangeFloorDb, deviceLoHz, deviceHiHz);
         report = haveData ? themis::analyseTranslation (measured, haveFold ? &fold : nullptr, target, device) : themis::TranslationReport {};
+        phase = havePhase ? themis::analysePhase (phaseBands) : themis::PhaseReport {};
         repaint();
     }
 
@@ -61,7 +75,8 @@ public:
         g.fillRoundedRectangle (area, 8.0f);
 
         auto strips = area.removeFromBottom (2.0f * kStripHeight);
-        auto strip = strips.removeFromTop (kStripHeight).reduced (8.0f, 4.0f);
+        broadbandStrip = strips.removeFromTop (kStripHeight).reduced (8.0f, 4.0f);
+        const auto strip = broadbandStrip;
         translationStrip = strips.reduced (8.0f, 4.0f);
         plot = area.reduced (40.0f, 14.0f).withTrimmedBottom (14.0f);
 
@@ -80,6 +95,7 @@ public:
             g.setFont (ui::font (15.0f));
             g.drawText ("Play your track - the curve builds up as audio flows through", plot.toNearestInt(), juce::Justification::centred);
         }
+        drawPhaseRegion (g);
         drawBroadband (g, strip);
         drawTranslation (g, translationStrip);
         drawHover (g);
@@ -89,19 +105,28 @@ public:
     {
         hoverBand = plot.contains (e.position) ? bandForX (e.position.x) : -1;
         overTranslationStrip = translationStrip.contains (e.position);
+        overBroadbandStrip = broadbandStrip.contains (e.position);
         repaint();
     }
     void mouseExit (const juce::MouseEvent&) override
     {
         hoverBand = -1;
         overTranslationStrip = false;
+        overBroadbandStrip = false;
         repaint();
     }
 
     // Tooltip over the translation readouts: the numbers behind the bars.
     juce::String getTooltip() override
     {
-        if (!overTranslationStrip || !haveData)
+        if (overBroadbandStrip && !overTranslationStrip)
+            return fundamentalHz > 0.0f ? "FUNDAMENTAL: the lowest tonal bass peak (" + hzText (fundamentalHz) + ") is "
+                                              + (noFundamentalHarmonics ? juce::String ("the only tonal component found: no harmonics. ")
+                                                                        : signedDb (fundamentalTiltDb) + " against its harmonics. ")
+                                              + "Sub-heavy bass has little above it for small speakers to play; harmonic-rich bass is carried by its upper partials. "
+                                                "See the FUNDAMENTAL graph for how it moves."
+                                        : juce::String();
+        if (!overTranslationStrip)
             return {};
         juce::StringArray lines;
         if (report.haveDevice && device != nullptr)
@@ -111,6 +136,8 @@ public:
         if (report.haveFold)
             lines.add ("MONO FOLD is the power lost when the channels are summed (0 dB = mono-safe, 3 dB = uncorrelated, more = phase "
                        "cancellation). The coloured strip under the curve shows it per band.");
+        if (phase.have)
+            lines.add (phaseTooltip());
         lines.add ("Device responses are generic approximations, and the limits are rules of thumb; neither is measured data. "
                    "Nothing here changes the audio.");
         return lines.joinIntoString ("\n");
@@ -123,6 +150,7 @@ private:
 
     static constexpr float kTopDb = 12.0f, kBottomDb = -30.0f;
     static constexpr float kStripHeight = 44.0f;
+    static constexpr float kFoldStripHeight = 5.0f; // the mono-fold strip along the bottom of the plot (and the phase region outline around it)
 
     static juce::String signedDb (float v) { return (v >= 0.0f ? "+" : "") + juce::String (v, 1) + " dB"; }
     static juce::String hzText (double hz)
@@ -249,22 +277,19 @@ private:
 
     void drawBroadband (juce::Graphics& g, juce::Rectangle<float> strip) const
     {
-        struct Range { const char* name; double lo, hi; };
-        static constexpr Range ranges[4] = { { "LOW", themis::BandGrid::kF0, 120 }, { "LOW-MID", 120, 1000 }, { "HIGH-MID", 1000, 6000 },
-                                             { "HIGH", 6000, themis::BandGrid::kMaxHz } };
         const int last = lastDrawableBand();
-        drawLowCrest (g, ui::MeterCell::inStrip (strip, 4)); // four tonal bands + the low-end crest meter
-        for (int r = 0; r < 4; ++r)
+        drawLowCrest (g, ui::MeterCell::inStrip (strip, 4)); // four tonal bands + the low-end crest meter + the fundamental
+        drawFundamental (g, ui::MeterCell::inStrip (strip, 5));
+        for (int r = 0; r < themis::kNumEnergyRanges; ++r)
         {
             const auto cell = ui::MeterCell::inStrip (strip, r);
-            cell.drawTitle (g, ranges[r].name);
+            cell.drawTitle (g, themis::kEnergyRanges[r].name);
 
             double delta = 0, tol = 0;
             int n = 0;
             for (int i = 0; i <= last; ++i)
             {
-                const double f = themis::BandGrid::centreHz (i);
-                if (f >= ranges[r].lo && f < ranges[r].hi)
+                if (themis::kEnergyRanges[r].contains (i))
                 {
                     const auto s = static_cast<size_t> (i);
                     delta += measured[s] - target.medianDb[s];
@@ -352,7 +377,6 @@ private:
     {
         if (!haveFold)
             return;
-        constexpr float kHeight = 5.0f;
         for (int i = 0; i <= lastDrawableBand(); ++i)
         {
             const auto s = static_cast<size_t> (i);
@@ -361,7 +385,7 @@ private:
             const float loss = -fold[s];
             g.setColour (colours::forLevel (themis::translation::bandMonoLevel (i, loss)).withAlpha (0.9f));
             const float x0 = xFor (themis::BandGrid::lowEdgeHz (i)), x1 = xFor (themis::BandGrid::highEdgeHz (i));
-            g.fillRect (std::max (x0, plot.getX()), plot.getBottom() - kHeight, std::min (x1, plot.getRight()) - std::max (x0, plot.getX()), kHeight);
+            g.fillRect (std::max (x0, plot.getX()), plot.getBottom() - kFoldStripHeight, std::min (x1, plot.getRight()) - std::max (x0, plot.getX()), kFoldStripHeight);
         }
     }
 
@@ -385,6 +409,11 @@ private:
     {
         namespace tr = themis::translation;
         const auto cell = [&] (int i) { return ui::MeterCell::inStrip (strip, i); };
+        // The phase check does not need the tonal curve: a fully out-of-phase signal has no mid to build one from.
+        if (havePhase)
+            drawPhase (g, cell (4));
+        else
+            cell (4).drawNote (g, "PHASE CHECK", "measuring...", colours::dim);
         if (!haveData)
             return;
 
@@ -412,7 +441,90 @@ private:
             cell (1).drawNote (g, "MONO FOLD", "measuring...", colours::dim);
         }
 
-        cell (4).drawNote (g, "DEVICE RANGE", device != nullptr ? hzText (deviceLoHz) + " - " + hzText (deviceHiHz) : juce::String ("-"), colours::dim);
+        cell (5).drawNote (g, "DEVICE RANGE", device != nullptr ? hzText (deviceLoHz) + " - " + hzText (deviceHiHz) : juce::String ("-"), colours::dim);
+    }
+
+    // Outlines the widest cancelling region on the mono-fold strip.
+    void drawPhaseRegion (juce::Graphics& g) const
+    {
+        if (!phase.have || phase.cause == themis::PhaseCause::none)
+            return;
+        const float x0 = std::max (xFor (phase.loHz), plot.getX()), x1 = std::min (xFor (phase.hiHz), plot.getRight());
+        g.setColour (colours::text.withAlpha (0.9f));
+        g.drawRect (x0, plot.getBottom() - kFoldStripHeight - 1.0f, x1 - x0, kFoldStripHeight + 2.0f, 1.0f);
+    }
+
+    static juce::String phaseVerdict (const themis::PhaseReport& p)
+    {
+        switch (p.cause)
+        {
+            case themis::PhaseCause::none: return "OK";
+            case themis::PhaseCause::polarity: return "Polarity flipped";
+            case themis::PhaseCause::delay: return "Delay " + juce::String (p.delayMs, 2) + " ms";
+            case themis::PhaseCause::other: break;
+        }
+        return hzText (p.loHz) + " - " + hzText (p.hiHz);
+    }
+
+    // Does a mono sum lose more than uncorrelated channels would, and why.
+    void drawPhase (juce::Graphics& g, const ui::MeterCell& cell) const
+    {
+        cell.drawNote (g, "PHASE CHECK", phaseVerdict (phase), colours::forLevel (phase.level));
+    }
+
+    juce::String phaseTooltip() const
+    {
+        const auto where = hzText (phase.loHz) + " - " + hzText (phase.hiHz);
+        const auto depth = juce::String (phase.flaggedBands) + (phase.flaggedBands == 1 ? " band" : " bands") + " lose up to "
+                           + juce::String (phase.worstLossDb, 1) + " dB in a mono sum";
+        switch (phase.cause)
+        {
+            case themis::PhaseCause::none:
+                return "PHASE CHECK: no band loses more in a mono sum than uncorrelated channels would (3 dB), so nothing is cancelling.";
+            case themis::PhaseCause::polarity:
+                return "PHASE CHECK: the channels are in opposite polarity" + (phase.delayMs > 0.0f ? " (and offset by " + juce::String (phase.delayMs, 2) + " ms)" : juce::String())
+                       + ". " + depth + "; the outlined region (" + where + ") is the widest. Check a polarity / phase-invert switch.";
+            case themis::PhaseCause::delay:
+                return "PHASE CHECK: one channel (" + juce::String (phase.leftLate ? "left" : "right") + ") is about " + juce::String (phase.delayMs, 2)
+                       + " ms late, which makes a comb filter with the first notch near " + hzText (phase.notchHz) + " in mono. " + depth
+                       + "; widest region " + where + ".";
+            case themis::PhaseCause::other:
+                break;
+        }
+        return "PHASE CHECK: " + depth + "; the widest region is " + where
+               + ". The phase between the channels is not a plain delay or polarity flip: look for stereo wideners, phase-shifting effects "
+                 "or a source that is panned with a time offset.";
+    }
+
+    // The newest tonal bass in the last ~1 s of the history: its frequency and how far its fundamental sits above its harmonics.
+    void latestFundamental (float& hz, float& tiltDb, bool& noHarmonics) const
+    {
+        std::array<themis::FrameStats, 12> recent {};
+        const int n = proc.frameHistory().copyRecent (recent.data(), static_cast<int> (recent.size()));
+        for (int i = n - 1; i >= 0; --i)
+        {
+            const auto& f = recent[static_cast<size_t> (i)];
+            if (!f.hasFundamental())
+                continue;
+            hz = f.f0Hz;
+            noHarmonics = !themis::hasLevel (f.harmonicsDb);
+            tiltDb = noHarmonics ? 0.0f : f.fundamentalDb - f.harmonicsDb;
+            return;
+        }
+        noHarmonics = false;
+    }
+
+    // Where the bass fundamental sits against its harmonics (hand-authored labels, see themis::fundamental::balanceOf).
+    void drawFundamental (juce::Graphics& g, const ui::MeterCell& cell) const
+    {
+        if (fundamentalHz <= 0.0f)
+        {
+            cell.drawNote (g, "FUNDAMENTAL", "-", colours::dim);
+            return;
+        }
+        using themis::fundamental::Balance;
+        const auto balance = noFundamentalHarmonics ? Balance::subHeavy : themis::fundamental::balanceOf (fundamentalTiltDb);
+        cell.drawNote (g, "FUNDAMENTAL", hzText (fundamentalHz) + "  " + themis::fundamental::name (balance), colours::text);
     }
 
     void drawHover (juce::Graphics& g) const
@@ -444,6 +556,13 @@ private:
     themis::BandArray deviceResponse {};
     themis::TargetCurve target;
     themis::TranslationReport report;
+    themis::PhaseBands phaseBands {};
+    themis::PhaseReport phase;
+    bool havePhase = false;
+    float fundamentalHz = 0.0f, fundamentalTiltDb = 0.0f; // newest tonal bass; 0 Hz when there is none
+    bool noFundamentalHarmonics = false;
+    bool overBroadbandStrip = false;
+    juce::Rectangle<float> broadbandStrip;
     const themis::DeviceProfile* device = nullptr;
     double deviceLoHz = themis::BandGrid::kF0, deviceHiHz = themis::BandGrid::kMaxHz;
     int deviceIndex = -1;

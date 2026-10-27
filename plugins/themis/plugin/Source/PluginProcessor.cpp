@@ -119,6 +119,14 @@ bool ThemisProcessor::readMonoFold (themis::BandArray& out) const
     return true;
 }
 
+bool ThemisProcessor::readPhase (themis::PhaseBands& out) const
+{
+    if (!analyzer.hasMonoFoldData())
+        return false;
+    analyzer.readPhase (out);
+    return true;
+}
+
 const themis::DeviceProfile* ThemisProcessor::activeDevice() const
 {
     return params::deviceForChoice (static_cast<int> (paramReader.value (params::device)));

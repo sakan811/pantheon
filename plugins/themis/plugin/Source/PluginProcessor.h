@@ -5,6 +5,7 @@
 #include <juce_audio_formats/juce_audio_formats.h>
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <themis/LowCrestMeter.h>
+#include <themis/PhaseCancellation.h>
 #include <themis/StereoScope.h>
 
 #include <atomic>
@@ -58,6 +59,13 @@ public:
     // Per-band mono fold in dB (<= 0): how much of each band's power survives a sum to mono.
     // Returns false until enough audio has been analysed.
     bool readMonoFold (themis::BandArray& out) const;
+
+    // Per-band phase relationship between the channels (see themis::analysePhase). Returns false until enough audio
+    // has been analysed.
+    bool readPhase (themis::PhaseBands& out) const;
+
+    // Energy per range and bass fundamental of every analysed frame, for the time graphs.
+    const themis::FrameHistory& frameHistory() const { return analyzer.history(); }
 
     // The playback device selected for the translation preview, or nullptr when it is "Off".
     const themis::DeviceProfile* activeDevice() const;

@@ -41,6 +41,24 @@ static std::vector<float> pinkNoise (size_t n, unsigned seed, float amp)
     return v;
 }
 
+// The analysis runs on a worker thread that polls every ~15 ms; give it time to drain what runAudio() queued.
+static void settle() { juce::Thread::sleep (150); }
+
+// Feeds a stereo signal through the processor in blocks, as a host would.
+static void runBlocks (ThemisProcessor& proc, const float* l, const float* r, size_t total, int block)
+{
+    juce::AudioBuffer<float> buf (2, block);
+    juce::MidiBuffer midi;
+    for (size_t pos = 0; pos < total; pos += static_cast<size_t> (block))
+    {
+        const int n = static_cast<int> (std::min<size_t> (static_cast<size_t> (block), total - pos));
+        buf.setSize (2, n, false, false, true);
+        buf.copyFrom (0, 0, l + pos, n);
+        buf.copyFrom (1, 0, r + pos, n);
+        proc.processBlock (buf, midi);
+    }
+}
+
 // `coherence` mixes the left channel into the right one: 0 = independent channels, 1 = mono.
 static void runAudio (ThemisProcessor& proc, double seconds, double fs, int block, float amp, unsigned seed, float coherence = 0.0f)
 {
@@ -49,20 +67,35 @@ static void runAudio (ThemisProcessor& proc, double seconds, double fs, int bloc
     auto r = pinkNoise (total, seed + 1, amp);
     for (size_t i = 0; i < total; ++i)
         r[i] += coherence * (l[i] - r[i]);
-    juce::AudioBuffer<float> buf (2, block);
-    juce::MidiBuffer midi;
-    for (size_t pos = 0; pos < total; pos += static_cast<size_t> (block))
-    {
-        const int n = static_cast<int> (std::min<size_t> (static_cast<size_t> (block), total - pos));
-        buf.setSize (2, n, false, false, true);
-        buf.copyFrom (0, 0, l.data() + pos, n);
-        buf.copyFrom (1, 0, r.data() + pos, n);
-        proc.processBlock (buf, midi);
-    }
+    runBlocks (proc, l.data(), r.data(), total, block);
 }
 
-// The analysis runs on a worker thread that polls every ~15 ms; give it time to drain what runAudio() queued.
-static void settle() { juce::Thread::sleep (150); }
+// A short programme for the screenshot: a four-note bass line (fundamental + two harmonics, centred, with gaps)
+// over pink noise whose right channel is `delaySeconds` late, so the phase check, the mono fold, the fundamental
+// and the energy graph all have something to show.
+static void runDemoProgramme (ThemisProcessor& proc, double seconds, double fs, int block, double delaySeconds)
+{
+    const size_t total = static_cast<size_t> (seconds * fs), delay = static_cast<size_t> (delaySeconds * fs);
+    const auto noise = pinkNoise (total, 9, 0.05f);
+    constexpr double notes[] = { 49.0, 55.0, 41.2, 61.7 }, kNoteSeconds = 5.0, kSoundingSeconds = 4.2;
+    std::vector<float> l (total), r (total);
+    for (size_t i = 0; i < total; ++i)
+    {
+        const double t = static_cast<double> (i) / fs, phase = 2.0 * juce::MathConstants<double>::pi * notes[static_cast<size_t> (t / kNoteSeconds) % 4] * t;
+        const bool sounding = std::fmod (t, kNoteSeconds) < kSoundingSeconds;
+        const float bass = sounding ? static_cast<float> (0.30 * std::sin (phase) + 0.12 * std::sin (2.0 * phase) + 0.05 * std::sin (3.0 * phase)) : 0.0f;
+        l[i] = bass + noise[i];
+        r[i] = bass + noise[i >= delay ? i - delay : 0];
+    }
+    // Fed in slices with a pause after each, so the analysis thread keeps up and the history graphs fill like in a host
+    // (it skips frames when audio arrives much faster than real time).
+    const size_t slice = static_cast<size_t> (2.0 * fs);
+    for (size_t pos = 0; pos < total; pos += slice)
+    {
+        runBlocks (proc, l.data() + pos, r.data() + pos, std::min (slice, total - pos), block);
+        settle();
+    }
+}
 
 static void pump (int ms) { juce::MessageManager::getInstance()->runDispatchLoopUntil (ms); }
 
@@ -164,6 +197,36 @@ int main (int argc, char** argv)
         settle();
     }
 
+    std::printf ("[1d] phase check + history: a polarity flip is caught without any mid signal, and the graphs get frames\n");
+    {
+        themis::PhaseBands ph {};
+        proc.resetAnalyzer();
+        runAudio (proc, 0.1, fs, 512, 0.5f, 1);
+        settle();
+        CHECK (!proc.readPhase (ph), "reset should clear the phase data");
+        CHECK (proc.frameHistory().sequence() <= 2, "reset should clear the history");
+
+        const auto l = pinkNoise (static_cast<size_t> (10.0 * fs), 1, 0.5f);
+        auto inverted = l;
+        for (auto& x : inverted)
+            x = -x;
+        runBlocks (proc, l.data(), inverted.data(), l.size(), 512);
+        settle();
+        CHECK (proc.readPhase (ph));
+        const auto report = themis::analysePhase (ph);
+        std::printf ("    inverted pink noise: cause %d, level %d, %d bands flagged\n", static_cast<int> (report.cause),
+                     static_cast<int> (report.level), report.flaggedBands);
+        CHECK (report.cause == themis::PhaseCause::polarity && report.level == themis::Level::bad);
+
+        themis::FrameStats frames[16];
+        const int n = proc.frameHistory().copyRecent (frames, 16);
+        CHECK (n == 16, "history should hold the analysed frames, got %d", n);
+        CHECK (n > 0 && frames[n - 1].rangeDb[1] > -40.0f && frames[n - 1].rangeDb[1] < 0.0f, "low-mid energy %.1f dB", n > 0 ? frames[n - 1].rangeDb[1] : 0.0f);
+        proc.resetAnalyzer();
+        runAudio (proc, 0.1, fs, 512, 0.5f, 1);
+        settle();
+    }
+
     std::printf ("[2] averaging parameter reaches the analyser setting\n");
     {
         auto* p = proc.apvts.getParameter (params::avgTime);
@@ -241,16 +304,29 @@ int main (int argc, char** argv)
 
     std::printf ("[6] editor builds, paints and survives resizing\n");
     {
-        runAudio (proc, 14.0, fs, 512, 0.5f, 3, 0.55f); // so the screenshot shows a measured curve and a plausible stereo image
+        // The screenshot: a built-in target (like a real session) and the demo programme, which has 0.5 ms of channel delay.
+        auto* target = proc.apvts.getParameter (params::target);
+        target->setValueNotifyingHost (target->convertTo0to1 (static_cast<float> (params::kDefaultTarget)));
+        auto* avg = proc.apvts.getParameter (params::avgTime);
+        avg->setValueNotifyingHost (avg->convertTo0to1 (static_cast<float> (params::kDefaultAvgTime)));
+        proc.resetAnalyzer();
+        runAudio (proc, 0.1, fs, 512, 0.5f, 1);
+        settle(); // the reset is applied by the worker; audio pushed before that would be discarded
+        runDemoProgramme (proc, 45.0, fs, 512, 0.0005);
         settle();
+        themis::PhaseBands ph {};
+        CHECK (proc.readPhase (ph));
+        const auto phase = themis::analysePhase (ph);
+        CHECK (phase.cause == themis::PhaseCause::delay && std::abs (phase.delayMs - 0.5f) < 0.05f, "demo programme: cause %d, delay %.2f ms",
+               static_cast<int> (phase.cause), phase.delayMs);
         std::unique_ptr<juce::AudioProcessorEditor> editor (proc.createEditor());
         CHECK (editor != nullptr);
         if (editor != nullptr)
         {
-            editor->setSize (1240, 580);
+            editor->setSize (1240, 770);
             pump (400); // let the 30 Hz timer pull data
             auto img = editor->createComponentSnapshot (editor->getLocalBounds(), true, 1.0f);
-            CHECK (img.isValid() && img.getWidth() == 1240);
+            CHECK (img.isValid() && img.getWidth() == 1240 && img.getHeight() == 770);
             if (argc > 1)
             {
                 juce::File png (argv[1]);
@@ -260,8 +336,8 @@ int main (int argc, char** argv)
                     fmt.writeImageToStream (img, *out);
                 std::printf ("    snapshot -> %s\n", png.getFullPathName().toRawUTF8());
             }
-            editor->setSize (900, 440);
-            editor->setSize (1900, 1100);
+            editor->setSize (900, 620);
+            editor->setSize (1900, 1200);
             pump (100);
         }
     }

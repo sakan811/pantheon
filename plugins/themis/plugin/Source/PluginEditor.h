@@ -1,5 +1,6 @@
 #pragma once
 
+#include "HistoryViews.h"
 #include "PluginProcessor.h"
 #include "StereoScopeView.h"
 #include "ThemisLookAndFeel.h"
@@ -77,6 +78,7 @@ private:
     void loadCurve();
 
     static constexpr const char* kCurveExtension = ".themiscurve";
+    static constexpr int kHistoryHeight = 170; // the two time graphs along the bottom
     static constexpr int kTitleWidth = 120; // the "THEMIS" wordmark; the header rows start after it
 
     ThemisProcessor& proc;
@@ -84,6 +86,8 @@ private:
 
     TonalBalanceView view;
     StereoScopeView scopeView;
+    ui::EnergyView energyView;
+    ui::FundamentalView fundamentalView;
 
     ui::Choice targetBox, avgBox, deviceBox;
     juce::Label deviceLabel;

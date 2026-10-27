@@ -10,7 +10,7 @@ struct MeterCell
 {
     static constexpr float kTitleHeight = 14.0f, kBarHeight = 12.0f;
     static constexpr float kMarkerWidth = 4.0f;
-    static constexpr int kColumns = 5; // cells per readout strip
+    static constexpr int kColumns = 6; // cells per readout strip
 
     juce::Rectangle<float> area;
 
