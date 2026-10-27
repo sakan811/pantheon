@@ -1,0 +1,88 @@
+# CLAUDE.md
+
+Hephaestus: a JUCE 8 mastering saturator (VST3 / AU / Standalone, macOS) with a missing-fundamental
+bass engine. See `README.md` for what it does and the research behind it; this file is what you need
+to change it safely.
+
+## Build and verify
+
+```bash
+# Required on this machine: the Command Line Tools ship an SDK that Xcode's linker cannot read.
+export SDKROOT=$(xcrun --sdk macosx --show-sdk-path)
+
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release     # fetches JUCE 8.0.16-security (or uses third_party/JUCE)
+cmake --build build --target HephaestusTests -j 10 && ./build/HephaestusTests_artefacts/Release/HephaestusTests
+cmake --build build --target Hephaestus_VST3 Hephaestus_AU Hephaestus_Standalone -j 10
+cmake --build build --target HephaestusHostCheck && ./build/HephaestusHostCheck_artefacts/Release/HephaestusHostCheck ~/Library/Audio/Plug-Ins/VST3/Hephaestus.vst3
+cmake --build build --target HephaestusSnapshot && ./build/HephaestusSnapshot_artefacts/Release/HephaestusSnapshot docs/screenshot.png "Missing Fundamental"
+auval -v aufx Hphs Hpha                             # Apple's AU validator
+```
+
+- Building the plugin targets **installs** them to `~/Library/Audio/Plug-Ins/{VST3,Components}` (`COPY_PLUGIN_AFTER_BUILD`).
+- `HephaestusTests`, `HostCheck` and `Snapshot` are `EXCLUDE_FROM_ALL`; build them by name. `HephaestusTests` needs no GUI.
+- Definition of done for any DSP change: `HephaestusTests` passes **and** the README numbers still match its output.
+- pluginval is not available (the sandbox blocks running the downloaded binary); `HostCheck` + `auval` are the substitutes.
+
+## Layout
+
+```
+Source/DSP/        no GUI dependencies; everything here is covered by Tests/Tests.cpp
+  Biquad.h           double-precision biquads, Butterworth, Bandpass pair
+  Waveshaper.h       curves + residual-ADAA shaper
+  Saturator.h        LR4 3-band split, per-band oversample + shape
+  FundamentalEngine.h  Chebyshev "extend" + difference-tone "restore", GapDetector
+  Engine.h           latency alignment, M/S, gain match, delta, meters, analyzer taps
+  AnalyzerTap.h      lock-free sample FIFOs (audio thread -> editor)
+  SpectrumAnalyzer.h Pro-Q-style FFT analyzer (GUI-free so its calibration is testable)
+Source/Parameters.h  parameter layout, presets, readParams()  <- the single source of truth for parameters
+Source/Plugin*.{h,cpp}, Source/UI/   JUCE wrapper and editor
+Tests/               Tests.cpp (DSP), HostCheck.cpp (loads the VST3), Snapshot.cpp (editor -> PNG), Check.h, TestSignals.h
+```
+
+## Rules that keep it correct
+
+**Real time.** `Engine::process` and everything under it must not allocate, lock, or log. Buffers are sized in
+`prepare()`. `setLatencySamples` is only called from the message thread (`AsyncUpdater` in the processor).
+
+**Latency.** Every path that is summed with another must pass through an `IntDelay` set to the oversampling
+latency (`dryDelay`, `fundDelay`, `bypassDelay`). If you add a path, align it and extend test [2]/[8].
+
+**Saturator maths.** ADAA is applied to the *residual* (`f(u)` minus its tangent) and added to the untouched input, so
+small-signal gain is exactly 1 (test [1]). Do not "simplify" this back to plain ADAA: it low-passes the wet path
+(about -5 dB at 15 kHz without oversampling). ADAA runs in `double`; keep the first-sample priming in `AdaaState`
+(without it a non-zero bias clicks at start).
+
+**Low-frequency filters are `double`.** Poles near z = 1 do not survive single precision at tens of Hz.
+
+**Fundamental engine.** Harmonic weights are exact only while the normalised amplitude `a` is ~1 (the k-th Chebyshev
+harmonic scales as `a^k`), so the envelope release is deliberately slow (`6 / lo`). Shortening it costs accuracy at
+the top harmonics (test [5]); lengthening it risks hanging tails (test [5b]). Restore's gap detector must stay
+frequency-selective (`GapDetector`): comparing against the whole band, or correlating with the restored signal,
+were both tried and failed.
+
+**Parameters.** IDs in `hep::id` are stored in sessions and automation: never rename or remove one. A new parameter
+needs a `ParameterID` version, an entry in `readParams()`, and (if it has a knob) a row in the editor's `knobSpecs` table.
+Session-wide controls go in `isGlobalParameter()` so presets leave them alone.
+
+## DRY: where each thing lives (change it there only)
+
+- parameter ranges, defaults, choice lists, "off" thresholds -> `Parameters.h` (the editor reads combo items from the parameter)
+- knob id / caption / tooltip / panel membership -> the `knobSpecs` and `panelSpecs` tables in `PluginEditor.cpp`
+- bass-range upper limit -> `effectiveRangeHigh()` (engine and spectrum view both call it)
+- log-frequency axis -> `FreqAxis` in `SpectrumView.h`
+- test signals and `check()` -> `Tests/TestSignals.h`, `Tests/Check.h`
+
+## Gotchas already paid for
+
+- In an editor constructor call `setSize()` **last**; `resized()` runs inside it and only positions controls that exist.
+- A hosted VST3's parameters are wrapper objects: find them by name, not `dynamic_cast<RangedAudioParameter*>`.
+  Its editor is a native view, so editor screenshots must instantiate `HephaestusProcessor` directly (`Snapshot.cpp`).
+- `runDispatchLoopUntil` needs `JUCE_MODAL_LOOPS_PERMITTED=1` in the test targets.
+- The analyzer uses Hann, so an off-bin sine can read up to 1.42 dB low (scalloping). That is expected, not a bug.
+
+## Conventions
+
+- Match the surrounding JUCE style: Allman braces, a space before call parentheses, `juce::` qualified in headers.
+- Comments explain *why* (a measured failure, a constraint), not what the code does.
+- Claims in the README must be backed by a test or a measurement; re-run the suite and update the numbers.
+- Commit by topic (DSP / plugin / UI / tests / docs / build); end commit messages with the Co-Authored-By trailer.
