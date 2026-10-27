@@ -1,10 +1,14 @@
 // Self-contained tests for the Themis DSP core (no framework dependency).
 #include <themis/Compressor.h>
 #include <themis/Engine.h>
+#include <themis/Biquad.h>
 #include <themis/EqFit.h>
+#include <themis/FrameHistory.h>
+#include <themis/Fundamental.h>
 #include <themis/Limiter.h>
 #include <themis/LowCrestMeter.h>
 #include <themis/Loudness.h>
+#include <themis/PhaseCancellation.h>
 #include <themis/StereoScope.h>
 #include <themis/StereoTools.h>
 #include <themis/TargetCurve.h>
@@ -894,13 +898,19 @@ TEST (engine_latency_bypass_ceiling_and_ab)
 }
 
 // ---- mono fold + device translation --------------------------------------------------------------
-static BandArray analyseFold (const std::vector<float>& l, const std::vector<float>& r, double fs)
+// Whole-signal average (no smoothing window) of a stereo signal, fed in 4096-sample blocks.
+static void analyseWhole (TonalAnalyzer& a, const std::vector<float>& l, const std::vector<float>& r, double fs)
 {
-    TonalAnalyzer a;
     a.prepare (fs);
     a.setAveragingSeconds (0.0f);
     for (size_t pos = 0; pos < l.size(); pos += 4096)
         a.process (l.data() + pos, r.data() + pos, static_cast<int> (std::min<size_t> (4096, l.size() - pos)));
+}
+
+static BandArray analyseFold (const std::vector<float>& l, const std::vector<float>& r, double fs)
+{
+    TonalAnalyzer a;
+    analyseWhole (a, l, r, fs);
     CHECK (a.hasMonoFoldData());
     BandArray fold {};
     a.readMonoFoldDb (fold);
@@ -1119,6 +1129,311 @@ TEST (tolerance_levels_use_one_scale)
     CHECK (toleranceLevel (-3.0f, 2.0f) == Level::warn);
     CHECK (toleranceLevel (4.0f, 2.0f) == Level::warn);
     CHECK (toleranceLevel (4.1f, 2.0f) == Level::bad);
+}
+
+
+// ---- phase cancellation ----------------------------------------------------------------------
+struct PhaseResult
+{
+    PhaseBands bands;
+    PhaseReport report;
+};
+
+static PhaseResult analysePhaseOf (const std::vector<float>& l, const std::vector<float>& r, double fs = 48000.0)
+{
+    TonalAnalyzer a;
+    analyseWhole (a, l, r, fs);
+    PhaseResult out;
+    CHECK (a.hasMonoFoldData());
+    a.readPhase (out.bands);
+    out.report = analysePhase (out.bands);
+    return out;
+}
+
+static std::vector<float> delayed (const std::vector<float>& x, size_t samples)
+{
+    std::vector<float> y (x.size(), 0.0f);
+    for (size_t i = samples; i < x.size(); ++i)
+        y[i] = x[i - samples];
+    return y;
+}
+
+TEST (phase_bands_follow_the_channel_relationship)
+{
+    const double fs = 48000;
+    const size_t n = static_cast<size_t> (fs * 20);
+    const auto a = pinkNoise (n, 3), b = pinkNoise (n, 4);
+    std::vector<float> inverted (n);
+    for (size_t i = 0; i < n; ++i)
+        inverted[i] = -a[i];
+    const auto at = [] (const BandArray& v, double hz) { return v[static_cast<size_t> (std::lround (BandGrid::indexForHz (hz)))]; };
+
+    const auto mono = analysePhaseOf (a, a), wide = analysePhaseOf (a, b), opposed = analysePhaseOf (a, inverted);
+    for (double hz : { 100.0, 1000.0, 8000.0 })
+    {
+        CHECK_NEAR (at (mono.bands.correlation, hz), 1.0, 0.01);
+        CHECK_NEAR (at (mono.bands.coherence, hz), 1.0, 0.01);
+        CHECK_NEAR (at (mono.bands.phaseRad, hz), 0.0, 0.05);
+        CHECK (std::abs (at (wide.bands.correlation, hz)) < 0.3);
+        CHECK (at (wide.bands.coherence, hz) < 0.6); // independent channels: no stable phase
+        CHECK_NEAR (at (opposed.bands.correlation, hz), -1.0, 0.01);
+        CHECK_NEAR (at (opposed.bands.coherence, hz), 1.0, 0.01);
+        CHECK_NEAR (std::abs (at (opposed.bands.phaseRad, hz)), kPi, 0.05);
+    }
+}
+
+TEST (phase_check_is_quiet_for_mono_and_wide_signals)
+{
+    const double fs = 48000;
+    const size_t n = static_cast<size_t> (fs * 30);
+    const auto a = pinkNoise (n, 3), b = pinkNoise (n, 4);
+    const auto mono = analysePhaseOf (a, a), wide = analysePhaseOf (a, b);
+    CHECK (mono.report.have && mono.report.cause == PhaseCause::none && mono.report.level == Level::good && mono.report.flaggedBands == 0);
+    CHECK (wide.report.have && wide.report.cause == PhaseCause::none && wide.report.level == Level::good);
+}
+
+TEST (phase_check_finds_a_polarity_flip)
+{
+    const double fs = 48000;
+    const size_t n = static_cast<size_t> (fs * 20);
+    const auto a = pinkNoise (n, 3);
+    std::vector<float> inverted (n);
+    for (size_t i = 0; i < n; ++i)
+        inverted[i] = -a[i];
+    const auto r = analysePhaseOf (a, inverted).report;
+    CHECK (r.cause == PhaseCause::polarity);
+    CHECK (r.level == Level::bad);
+    CHECK (r.flaggedBands > 40);
+    CHECK (r.fit > 0.95f);
+    CHECK (r.delayMs == 0.0f);
+    CHECK (r.loHz < 50.0 && r.hiHz > 10000.0);
+}
+
+TEST (phase_check_finds_a_channel_delay_and_its_first_notch)
+{
+    const double fs = 48000;
+    const size_t n = static_cast<size_t> (fs * 20);
+    const auto a = pinkNoise (n, 3);
+    for (size_t samples : { size_t (24), size_t (60) }) // 0.5 ms and 1.25 ms
+    {
+        const double ms = 1000.0 * static_cast<double> (samples) / fs;
+        const auto r = analysePhaseOf (a, delayed (a, samples)).report; // right channel late
+        CHECK (r.cause == PhaseCause::delay);
+        CHECK (r.level != Level::good && r.flaggedBands >= 2);
+        CHECK_NEAR (r.delayMs, ms, 0.03);
+        CHECK (!r.leftLate);
+        CHECK_NEAR (r.notchHz, 500.0 / ms, 500.0 / ms * 0.06);
+        CHECK (r.fit > 0.9f);
+        CHECK (analysePhaseOf (delayed (a, samples), a).report.leftLate);
+    }
+}
+
+TEST (phase_check_localises_cancellation_that_is_not_a_plain_delay)
+{
+    // Left and right share pink noise, but a 150 Hz low-pass part is inverted in the right channel. The filter's
+    // phase rotation leaves only the lowest octave truly out of phase (correlation < 0 below ~45 Hz).
+    const double fs = 48000;
+    const size_t n = static_cast<size_t> (fs * 20);
+    const auto a = pinkNoise (n, 3);
+    Biquad lp1, lp2;
+    lp1.setCoeffs (BiquadCoeffs::lowPass (fs, 150.0, 0.7071));
+    lp2.setCoeffs (BiquadCoeffs::lowPass (fs, 150.0, 0.7071));
+    std::vector<float> l = a, r = a;
+    for (size_t i = 0; i < n; ++i)
+    {
+        const float low = lp2.process (lp1.process (a[i]));
+        r[i] = a[i] - 2.0f * low; // the low part flips sign, the rest is untouched
+    }
+    const auto res = analysePhaseOf (l, r).report;
+    CHECK (res.level != Level::good);
+    CHECK (res.cause == PhaseCause::other);
+    CHECK (res.loHz < 40.0 && res.hiHz > 40.0 && res.hiHz < 120.0);
+    CHECK (BandGrid::centreHz (res.worstBand) < 40.0);
+}
+
+TEST (phase_check_ignores_bands_without_energy)
+{
+    PhaseBands ph;
+    ph.levelDb.fill (-60.0f); // below translation::kWorstBandFloorDb everywhere
+    ph.correlation.fill (-1.0f);
+    ph.coherence.fill (1.0f);
+    ph.phaseRad.fill (3.14159f);
+    const auto r = analysePhase (ph);
+    CHECK (r.have && r.cause == PhaseCause::none && r.flaggedBands == 0);
+}
+
+// ---- energy history + fundamental ------------------------------------------------------------
+TEST (frame_history_keeps_the_newest_frames_in_order)
+{
+    FrameHistory h;
+    FrameStats out[8];
+    CHECK (h.copyRecent (out, 8) == 0);
+    for (int i = 0; i < FrameHistory::kCapacity + 5; ++i)
+    {
+        FrameStats s;
+        s.f0Hz = static_cast<float> (i);
+        s.rangeDb[2] = static_cast<float> (-i);
+        h.push (s);
+    }
+    CHECK (h.sequence() == static_cast<uint64_t> (FrameHistory::kCapacity + 5));
+    CHECK (h.copyRecent (out, 8) == 8);
+    for (int i = 0; i < 8; ++i)
+    {
+        CHECK_NEAR (out[i].f0Hz, FrameHistory::kCapacity + 5 - 8 + i, 0.0);
+        CHECK_NEAR (out[i].rangeDb[2], -(FrameHistory::kCapacity + 5 - 8 + i), 0.0);
+    }
+    std::vector<FrameStats> all (FrameHistory::kCapacity + 50);
+    CHECK (h.copyRecent (all.data(), static_cast<int> (all.size())) == FrameHistory::kCapacity);
+    h.clear();
+    CHECK (h.copyRecent (out, 8) == 0 && h.sequence() == 0);
+}
+
+// Spectrum of a mono signal as the analyzer sees it: Hann window, power normalised, FFT length 16384.
+struct Spectrum
+{
+    std::vector<float> power;
+    double binHz;
+    double msScale;
+};
+
+static Spectrum spectrumOf (const std::vector<float>& x, double fs, size_t offset = 0)
+{
+    constexpr int n = 16384;
+    std::vector<float> frame (n);
+    double w2 = 0.0;
+    for (int i = 0; i < n; ++i)
+    {
+        const double w = 0.5 - 0.5 * std::cos (2.0 * kPi * i / n);
+        frame[static_cast<size_t> (i)] = x[offset + static_cast<size_t> (i)] * static_cast<float> (w);
+        w2 += w * w;
+    }
+    Spectrum s;
+    s.power.resize (n / 2 + 1);
+    RealFFT fft (n);
+    fft.powerSpectrum (frame.data(), s.power.data(), static_cast<float> (1.0 / w2));
+    s.binHz = fs / n;
+    s.msScale = 2.0 / n;
+    return s;
+}
+
+static FundamentalEstimate estimate (const std::vector<float>& x, double fs = 48000.0)
+{
+    const auto s = spectrumOf (x, fs);
+    return estimateFundamental (s.power.data(), static_cast<int> (s.power.size()), s.binHz, s.msScale);
+}
+
+static std::vector<float> mixOf (std::initializer_list<std::vector<float>> parts)
+{
+    std::vector<float> out (parts.begin()->size(), 0.0f);
+    for (const auto& p : parts)
+        for (size_t i = 0; i < out.size(); ++i)
+            out[i] += p[i];
+    return out;
+}
+
+TEST (fundamental_level_and_pitch_of_a_pure_tone)
+{
+    const double fs = 48000;
+    for (double hz : { 38.0, 55.0, 97.3, 200.0 })
+    {
+        const auto e = estimate (sine (fs, hz, -12.0, 0.5));
+        CHECK (e.found);
+        CHECK_NEAR (e.hz, hz, 0.6);
+        CHECK_NEAR (e.fundamentalDb, -12.0 - 3.01, 0.3); // mean square of a sine is half its squared amplitude
+        CHECK (e.harmonicsDb <= kHistoryFloorDb + 1.0f);
+    }
+}
+
+TEST (fundamental_is_measured_against_its_harmonics)
+{
+    const double fs = 48000;
+    // Saw-like bass: harmonics 2 and 3 at -6 and -12 dB relative to the fundamental.
+    const auto strong = mixOf ({ sine (fs, 55, -10, 0.5), sine (fs, 110, -16, 0.5), sine (fs, 165, -22, 0.5) });
+    auto e = estimate (strong);
+    CHECK (e.found);
+    CHECK_NEAR (e.hz, 55.0, 0.6);
+    CHECK_NEAR (e.fundamentalDb - e.harmonicsDb, 10.0 * std::log10 (1.0 / (std::pow (10.0, -0.6) + std::pow (10.0, -1.2))), 0.4);
+    CHECK (fundamental::balanceOf (e.fundamentalDb - e.harmonicsDb) == fundamental::Balance::balanced);
+
+    // A bass whose fundamental sits 15 dB under its first harmonic is still tracked from the fundamental, not the harmonic.
+    const auto weak = mixOf ({ sine (fs, 60, -33, 0.5), sine (fs, 120, -18, 0.5), sine (fs, 180, -21, 0.5) });
+    e = estimate (weak);
+    CHECK (e.found);
+    CHECK_NEAR (e.hz, 60.0, 0.6);
+    CHECK_NEAR (e.fundamentalDb - e.harmonicsDb, -15.0 - 10.0 * std::log10 (1.0 + std::pow (10.0, -0.3)), 0.4);
+    CHECK (fundamental::balanceOf (e.fundamentalDb - e.harmonicsDb) == fundamental::Balance::harmonicRich);
+
+    CHECK (fundamental::balanceOf (e.fundamentalDb - (e.fundamentalDb - 20.0f)) == fundamental::Balance::subHeavy);
+}
+
+TEST (fundamental_is_not_reported_for_noise_or_silence)
+{
+    const double fs = 48000;
+    for (unsigned seed = 1; seed <= 6; ++seed)
+    {
+        CHECK (!estimate (whiteNoise (16384, seed, 0.1f)).found);
+        CHECK (!estimate (pinkNoise (16384, seed, 0.25f)).found);
+    }
+    CHECK (!estimate (sine (fs, 55, -95.0, 0.5)).found);          // too quiet
+    CHECK (!estimate (sine (fs, 700, -10.0, 0.5)).found);         // outside the bass range
+    CHECK (!estimate (std::vector<float> (16384, 0.0f)).found);
+}
+
+TEST (analyzer_records_energy_per_range_and_silence)
+{
+    const double fs = 48000;
+    TonalAnalyzer a;
+    a.prepare (fs);
+    const auto tone = sine (fs, 2000, -20.0, 5.0);
+    a.process (tone.data(), tone.data(), static_cast<int> (tone.size()));
+    const std::vector<float> silence (static_cast<size_t> (fs * 2), 0.0f);
+    a.process (silence.data(), silence.data(), static_cast<int> (silence.size()));
+
+    const auto& h = a.history();
+    CHECK_NEAR (h.framePeriodSeconds(), 4096.0 / fs, 1.0e-9);
+    std::vector<FrameStats> frames (FrameHistory::kCapacity);
+    const int n = h.copyRecent (frames.data(), FrameHistory::kCapacity);
+    CHECK (n > 40);
+    const auto& mid = frames[static_cast<size_t> (n / 4)]; // well inside the tone
+    CHECK_NEAR (mid.rangeDb[2], -20.0 - 3.01, 1.0);        // HIGH-MID holds the tone: mean square of a -20 dB sine
+    CHECK (mid.rangeDb[0] < -70.0f && mid.rangeDb[1] < -70.0f && mid.rangeDb[3] < -70.0f);
+    CHECK (mid.f0Hz == 0.0f);
+    CHECK_NEAR (frames[static_cast<size_t> (n - 1)].rangeDb[2], kHistoryFloorDb, 1.0e-6); // digital silence
+    // Level independence of the curve does not touch the absolute energy history: a quieter tone reads lower.
+    TonalAnalyzer q;
+    q.prepare (fs);
+    const auto quiet = sine (fs, 2000, -40.0, 3.0);
+    q.process (quiet.data(), quiet.data(), static_cast<int> (quiet.size()));
+    std::vector<FrameStats> qf (FrameHistory::kCapacity);
+    const int qn = q.history().copyRecent (qf.data(), FrameHistory::kCapacity);
+    CHECK (qn > 10);
+    CHECK_NEAR (qf[static_cast<size_t> (qn - 1)].rangeDb[2], -43.01, 1.0);
+
+    a.requestReset();
+    a.process (silence.data(), silence.data(), 4096);
+    CHECK (a.history().sequence() <= 1);
+}
+
+TEST (analyzer_tracks_a_bass_fundamental_over_time)
+{
+    const double fs = 48000;
+    TonalAnalyzer a;
+    a.prepare (fs);
+    // 3 s of a 50 Hz bass with two harmonics, then 3 s of a 70 Hz one.
+    const auto first = mixOf ({ sine (fs, 50, -14, 3.0), sine (fs, 100, -20, 3.0), sine (fs, 150, -26, 3.0) });
+    const auto second = mixOf ({ sine (fs, 70, -14, 3.0), sine (fs, 140, -20, 3.0), sine (fs, 210, -26, 3.0) });
+    a.process (first.data(), first.data(), static_cast<int> (first.size()));
+    a.process (second.data(), second.data(), static_cast<int> (second.size()));
+    std::vector<FrameStats> frames (FrameHistory::kCapacity);
+    const int n = a.history().copyRecent (frames.data(), FrameHistory::kCapacity);
+    CHECK (n > 60);
+    const auto& early = frames[static_cast<size_t> (n / 4)];
+    const auto& late = frames[static_cast<size_t> (n - 3)];
+    CHECK_NEAR (early.f0Hz, 50.0, 0.7);
+    CHECK_NEAR (late.f0Hz, 70.0, 0.7);
+    CHECK_NEAR (early.fundamentalDb, -14.0 - 3.01, 0.5);
+    CHECK_NEAR (early.fundamentalDb - early.harmonicsDb, 10.0 * std::log10 (1.0 / (std::pow (10.0, -0.6) + std::pow (10.0, -1.2))), 0.5);
+    CHECK (late.rangeDb[0] > late.rangeDb[3]); // the energy sits in the LOW range
 }
 
 int main()

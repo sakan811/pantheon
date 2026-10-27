@@ -2,6 +2,8 @@
 
 #include "Common.h"
 #include "FFT.h"
+#include "FrameHistory.h"
+#include "Fundamental.h"
 
 #include <algorithm>
 #include <array>
@@ -38,6 +40,33 @@ struct BandGrid
 };
 
 using BandArray = std::array<float, BandGrid::kNum>;
+
+// The frequency ranges of the energy-over-time graph and of the LOW / LOW-MID / HIGH-MID / HIGH readouts. A band
+// belongs to a range by its centre frequency.
+struct EnergyRange
+{
+    const char* name;
+    double loHz, hiHz;
+
+    bool contains (int band) const
+    {
+        const double f = BandGrid::centreHz (band);
+        return f >= loHz && f < hiHz;
+    }
+};
+inline constexpr EnergyRange kEnergyRanges[kNumEnergyRanges] = { { "LOW", BandGrid::kF0, 120.0 },
+                                                                 { "LOW-MID", 120.0, 1000.0 },
+                                                                 { "HIGH-MID", 1000.0, 6000.0 },
+                                                                 { "HIGH", 6000.0, BandGrid::kMaxHz } };
+
+// Per-band stereo phase relationship, averaged over time like the tonal curve (see TonalAnalyzer::readPhase).
+struct PhaseBands
+{
+    BandArray correlation {}; // (M - S) / (M + S) in -1..+1: +1 mono, 0 uncorrelated, -1 out of phase
+    BandArray coherence {};   // 0..1: how stable the phase between the channels is (1 = a fixed delay / polarity relationship)
+    BandArray phaseRad {};    // arg(L R*): phase of the left channel relative to the right, -pi..pi
+    BandArray levelDb {};     // band level like the tonal curve (0 dB = anchor-region mean), but of mid + side, so it also exists for a pure-side signal
+};
 
 // Analysed bands at or below this level (dB, after anchor normalisation) carry no information: they lie
 // above the Nyquist frequency of the analysed signal (published as about -200 dB) or are digital silence.
@@ -87,6 +116,13 @@ inline void smoothBands (BandArray& v, int radius)
 // Mono fold: the same frames also yield, per band, how much of the stereo signal's power survives summing to mono,
 // 10 log10(M / (M + S)) with M = |(L+R)/2|^2 and S = |(L-R)/2|^2: 0 dB for a mono signal, -3 dB for uncorrelated
 // channels, strongly negative for out-of-phase content. Like the tonal curve it is level independent.
+//
+// Phase: the complex cross-spectrum L R* = (|M|^2 - |S|^2) - 2j Im(M S*) is averaged per band as well, giving the
+// correlation, the coherence (how stable the inter-channel phase is, which tells a fixed delay or polarity flip
+// from plain stereo width) and the phase itself; see PhaseCancellation.h for what is made of them.
+//
+// History: every non-silent frame also records the absolute stereo energy in each EnergyRange and the level of the
+// bass fundamental against its harmonics (Fundamental.h) into a FrameHistory, for the time graphs.
 class TonalAnalyzer
 {
 public:
@@ -124,7 +160,10 @@ public:
         ring.assign (static_cast<size_t> (ringSize), 0.0f);
         sideRing.assign (static_cast<size_t> (ringSize), 0.0f);
         sideFrame.assign (static_cast<size_t> (fftSize), 0.0f);
-        sidePower.assign (static_cast<size_t> (fftSize / 2 + 1), 0.0f);
+        const auto bins = static_cast<size_t> (fftSize / 2 + 1);
+        for (auto* v : { &sidePower, &midRe, &midIm, &sideRe, &sideIm, &crossRe, &crossIm })
+            v->assign (bins, 0.0f);
+        history_.setFramePeriod (static_cast<double> (hop) / fs);
         writeCount.store (0, std::memory_order_relaxed);
         buildBandMap();
         setAveragingSeconds (kDefaultAveragingSeconds);
@@ -207,6 +246,18 @@ public:
     // Latest mono-fold curve in dB (<= 0): the share of each band's power that survives a sum to mono.
     // Bands above the Nyquist frequency read 0.
     void readMonoFoldDb (BandArray& out) const { load (published.fold, out); }
+
+    // Per-band phase relationship between the channels (valid when hasMonoFoldData()); zeros before that.
+    void readPhase (PhaseBands& out) const
+    {
+        load (published.correlation, out.correlation);
+        load (published.coherence, out.coherence);
+        load (published.phase, out.phaseRad);
+        load (published.level, out.levelDb);
+    }
+
+    // Absolute energy and fundamental history, one entry per analysed frame (cleared by a reset).
+    const FrameHistory& history() const { return history_; }
 
     // Analyse an entire buffer offline (reference-track learning). Returns false if too short/quiet.
     static bool analyseOffline (const float* l, const float* r, size_t numSamples, double sampleRate, BandArray& out)
@@ -294,6 +345,36 @@ private:
         return total;
     }
 
+    static FrameStats silentFrame()
+    {
+        FrameStats s;
+        s.rangeDb.fill (kHistoryFloorDb);
+        return s;
+    }
+
+    // One history entry: the stereo energy (mid + side) per range, and the bass fundamental of the mid signal.
+    FrameStats frameStats (const std::array<double, BandGrid::kNum>& mid, const std::array<double, BandGrid::kNum>& side) const
+    {
+        FrameStats s = silentFrame();
+        const double toMeanSquare = 2.0 / fftSize; // the bin powers of a frame sum to (fftSize / 2) x its mean square
+        for (size_t r = 0; r < s.rangeDb.size(); ++r)
+        {
+            double sum = 0.0;
+            for (int b = 0; b < BandGrid::kNum; ++b)
+                if (bandMap[static_cast<size_t> (b)].valid && kEnergyRanges[r].contains (b))
+                    sum += mid[static_cast<size_t> (b)] + side[static_cast<size_t> (b)];
+            s.rangeDb[r] = static_cast<float> (powerToDb (sum * toMeanSquare, 1.0e-12));
+        }
+        const auto f = estimateFundamental (power.data(), fftSize / 2 + 1, fs / fftSize, toMeanSquare);
+        if (f.found)
+        {
+            s.f0Hz = static_cast<float> (f.hz);
+            s.fundamentalDb = f.fundamentalDb;
+            s.harmonicsDb = f.harmonicsDb;
+        }
+        return s;
+    }
+
     void analyseFrame (uint64_t start)
     {
         const size_t mask = static_cast<size_t> (ringSize - 1);
@@ -309,7 +390,28 @@ private:
         }
         const double meanPower = energy / fftSize;
         if (powerToDb (meanPower) < kSilenceDb)
+        {
+            history_.push (silentFrame());
             return;
+        }
+
+        fft->forward (frame.data(), midRe.data(), midIm.data());
+        fft->forward (sideFrame.data(), sideRe.data(), sideIm.data());
+        for (size_t k = 0; k < power.size(); ++k)
+        {
+            const float mr = midRe[k], mi = midIm[k], sr = sideRe[k], si = sideIm[k];
+            power[k] = (mr * mr + mi * mi) * powerNorm;
+            sidePower[k] = (sr * sr + si * si) * powerNorm;
+            crossRe[k] = (mr * sr + mi * si) * powerNorm; // Re(M S*)
+            crossIm[k] = (mi * sr - mr * si) * powerNorm; // Im(M S*)
+        }
+
+        std::array<double, BandGrid::kNum> e {}, eSide {}, xRe {}, xIm {};
+        const double total = bandEnergies (power, e);
+        const double totalSide = bandEnergies (sidePower, eSide);
+        bandEnergies (crossRe, xRe);
+        bandEnergies (crossIm, xIm);
+        history_.push (frameStats (e, eSide));
 
         const float tau = avgSeconds.load (std::memory_order_relaxed);
         const double hopSec = static_cast<double> (hop) / fs;
@@ -322,17 +424,12 @@ private:
         if (gated)
             return;
 
-        fft->powerSpectrum (frame.data(), power.data(), powerNorm);
-        fft->powerSpectrum (sideFrame.data(), sidePower.data(), powerNorm);
-
-        std::array<double, BandGrid::kNum> e {}, eSide {};
-        const double total = bandEnergies (power, e);
-        const double totalSide = bandEnergies (sidePower, eSide);
         const double totalBoth = total + totalSide;
         if (totalBoth < kPowerFloor)
             return;
 
         // Mono fold: each band's mid and side power as a share of this frame's total, averaged like the tonal curve.
+        // The cross-spectrum of mid and side is averaged the same way (it carries the phase between the channels).
         ++foldCount;
         const double foldAlpha = runningMeanWeight (smoothing, foldCount);
         const double invBoth = 1.0 / totalBoth;
@@ -342,6 +439,8 @@ private:
                 continue;
             foldMid[b] += foldAlpha * (e[b] * invBoth - foldMid[b]);
             foldSide[b] += foldAlpha * (eSide[b] * invBoth - foldSide[b]);
+            foldCrossRe[b] += foldAlpha * (xRe[b] * invBoth - foldCrossRe[b]);
+            foldCrossIm[b] += foldAlpha * (xIm[b] * invBoth - foldCrossIm[b]);
         }
 
         if (total >= kPowerFloor) // a fully out-of-phase frame has no mid and nothing to add to the tonal curve
@@ -370,9 +469,34 @@ private:
             const double both = foldMid[i] + foldSide[i];
             published.fold[i].store (bandMap[i].valid && both > 0.0 ? static_cast<float> (powerToDb (foldMid[i] / both, 1.0e-12)) : 0.0f,
                                      std::memory_order_relaxed);
+            publishPhase (i, both);
         }
+        BandArray level;
+        for (size_t i = 0; i < level.size(); ++i)
+            level[i] = static_cast<float> (powerToDb (foldMid[i] + foldSide[i]));
+        normaliseAnchor (level);
+        for (size_t i = 0; i < level.size(); ++i)
+            published.level[i].store (level[i], std::memory_order_relaxed);
         published.frames.store (frameCount, std::memory_order_relaxed);
         published.foldFrames.store (foldCount, std::memory_order_relaxed);
+    }
+
+    // The channel powers are M + S +/- 2 Re(M S*); the cross-spectrum L R* is (M - S) - 2j Im(M S*).
+    void publishPhase (size_t i, double both)
+    {
+        float corr = 0.0f, coh = 0.0f, phase = 0.0f;
+        if (bandMap[i].valid && both > 0.0)
+        {
+            const double re = foldMid[i] - foldSide[i], im = -2.0 * foldCrossIm[i];
+            const double pl = both + 2.0 * foldCrossRe[i], pr = both - 2.0 * foldCrossRe[i];
+            corr = static_cast<float> (std::clamp (re / both, -1.0, 1.0));
+            if (pl > 0.0 && pr > 0.0)
+                coh = static_cast<float> (std::min (1.0, std::hypot (re, im) / std::sqrt (pl * pr)));
+            phase = static_cast<float> (std::atan2 (im, re));
+        }
+        published.correlation[i].store (corr, std::memory_order_relaxed);
+        published.coherence[i].store (coh, std::memory_order_relaxed);
+        published.phase[i].store (phase, std::memory_order_relaxed);
     }
 
     void reset()
@@ -380,6 +504,9 @@ private:
         avg.fill (0.0);
         foldMid.fill (0.0);
         foldSide.fill (0.0);
+        foldCrossRe.fill (0.0);
+        foldCrossIm.fill (0.0);
+        history_.clear();
         frameCount = 0;
         foldCount = 0;
         refFrames = 0;
@@ -398,10 +525,13 @@ private:
     static constexpr uint64_t kRingFrames = 16; // ring length in FFT frames (~5 s at 48 kHz)
     std::unique_ptr<RealFFT> fft;
     std::vector<float> window, ring, sideRing, frame, sideFrame, power, sidePower;
+    std::vector<float> midRe, midIm, sideRe, sideIm, crossRe, crossIm; // complex spectra of the mid / side frames, and Re / Im of M S*
     float powerNorm = 1.0f;
     std::array<BandMap, BandGrid::kNum> bandMap {};
     std::array<double, BandGrid::kNum> avg {};
     std::array<double, BandGrid::kNum> foldMid {}, foldSide {}; // per-band mid / side power as a share of the frame total
+    std::array<double, BandGrid::kNum> foldCrossRe {}, foldCrossIm {}; // per-band Re / Im of M S*, on the same scale
+    FrameHistory history_;
     uint64_t ringSize = 0;
     std::atomic<uint64_t> writeCount { 0 }; // total samples pushed since prepare(); the ring index is count & (ringSize-1)
     uint64_t nextFrameEnd = 0;              // worker-side: absolute sample index where the next frame ends
@@ -418,7 +548,7 @@ private:
     {
         static constexpr float kNoCurveDb = -100.0f; // what the tonal curve reads before any data
         PublishedBands db;
-        PublishedBands fold;
+        PublishedBands fold, correlation, coherence, phase, level;
         std::atomic<int> frames { 0 };
         std::atomic<int> foldFrames { 0 };
         Published() { clear(); }
@@ -426,8 +556,11 @@ private:
         {
             for (auto& v : db)
                 v.store (kNoCurveDb, std::memory_order_relaxed);
-            for (auto& v : fold)
-                v.store (0.0f, std::memory_order_relaxed);
+            for (auto& v : level)
+                v.store (kNoCurveDb, std::memory_order_relaxed);
+            for (auto* bands : { &fold, &correlation, &coherence, &phase })
+                for (auto& v : *bands)
+                    v.store (0.0f, std::memory_order_relaxed);
             frames.store (0, std::memory_order_relaxed);
             foldFrames.store (0, std::memory_order_relaxed);
         }
