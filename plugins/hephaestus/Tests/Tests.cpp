@@ -670,6 +670,173 @@ void testSpectrumAnalyzer()
            "default tilt is 4.5 dB/oct, as in FabFilter Pro-Q");
 }
 
+
+// Power of the settled tail of `x` (Hann-windowed FFT) inside [lo, hi) Hz, and in total.
+struct Power { double inside, total; };
+Power powerBetween (const std::vector<float>& x, double lo, double hi)
+{
+    constexpr int order = 16, size = 1 << order;
+    juce::dsp::FFT fft (order);
+    std::vector<float> buf ((size_t) size * 2, 0.0f);
+    for (int i = 0; i < size; ++i)
+        buf[(size_t) i] = x[x.size() - (size_t) size + (size_t) i] * (float) (0.5 - 0.5 * std::cos (2.0 * M_PI * i / (size - 1)));
+    fft.performRealOnlyForwardTransform (buf.data());
+
+    Power sum { 0.0, 0.0 };
+    for (int k = 1; k < size / 2; ++k)
+    {
+        const double f = k * fs / size, re = buf[(size_t) (2 * k)], im = buf[(size_t) (2 * k + 1)];
+        sum.total += re * re + im * im;
+        if (f >= lo && f < hi)
+            sum.inside += re * re + im * im;
+    }
+    return sum;
+}
+
+// Noise confined to [lo, hi] by the same kind of filter the bands use.
+std::vector<float> bandNoise (int n, double lo, double hi, unsigned seed)
+{
+    Bandpass bp;
+    bp.setup (fs, 4, lo, 4, hi);
+    auto x = noise (n, seed, 1.0f);
+    double peak = 1.0e-9;
+    for (auto& v : x)
+    {
+        v = (float) bp.process (v);
+        peak = std::max (peak, (double) std::fabs (v));
+    }
+    for (auto& v : x)
+        v = (float) (v * 0.5 / peak);
+    return x;
+}
+
+// What the display shades as "harmonics added": it must match where the energy really goes.
+void testHarmonicSpan()
+{
+    std::printf ("\n[5f] Harmonic span: 2nd harmonic of the low edge to the 5th of the high edge, short of Nyquist\n");
+
+    const auto sat = harmonicSpan (BandMode::saturate, 100.0, 300.0, fs);
+    const auto fill = harmonicSpan (BandMode::fill, 40.0, 120.0, fs);
+    check (std::fabs (sat.lo - 200.0) < 1.0e-9 && std::fabs (sat.hi - 1500.0) < 1.0e-9
+               && std::fabs (fill.lo - 80.0) < 1.0e-9 && std::fabs (fill.hi - 600.0) < 1.0e-9,
+           fmt ("saturate 100-300 Hz -> %.0f-%.0f Hz, fill 40-120 Hz -> %.0f-%.0f Hz", sat.lo, sat.hi, fill.lo, fill.hi));
+
+    const auto wide = harmonicSpan (BandMode::saturate, 20.0, 20000.0, fs);
+    const auto high = harmonicSpan (BandMode::saturate, 12000.0, 20000.0, fs);
+    check (std::fabs (wide.hi - 0.48 * fs) < 1.0e-9 && high.hi <= high.lo,
+           fmt ("a full-range saturate band stops at 0.48 fs (%.0f Hz); a band above Nyquist/2 has no span", wide.hi));
+
+    const auto capped = harmonicSpan (BandMode::fill, 500.0, 9000.0, fs);
+    const auto slow = harmonicSpan (BandMode::fill, 1000.0, 2000.0, 16000.0);
+    check (std::fabs (capped.hi - 10000.0) < 1.0e-9 && std::fabs (slow.hi - 3.0 * 2000.0) < 1.0e-9,
+           fmt ("fill stops at 2 kHz (span top %.0f Hz) and drops H4/H5 on a 16 kHz host (top %.0f Hz)", capped.hi, slow.hi));
+
+    // Band-limited noise through each mode: what is added must not reach past the span.
+    const auto outside = [] (const std::vector<float>& added, Range span)
+    {
+        const auto p = powerBetween (added, span.lo, span.hi);
+        return std::pair<double, double> { 100.0 * (1.0 - p.inside / p.total), 100.0 * powerBetween (added, span.hi, 24000.0).inside / p.total };
+    };
+
+    for (double driveDb : { 6.0, 12.0, 24.0 })
+    {
+        Rig rig;
+        rig.p.delta = true;
+        rig.p.bias = 0.16;
+        rig.p.bands[0] = saturateBand (300.0, 900.0, std::pow (10.0, driveDb / 20.0));
+        const auto added = rig.runMono (bandNoise (200000, 300.0, 900.0, 7));
+        const auto [notInSpan, above] = outside (added, harmonicSpan (BandMode::saturate, 300.0, 900.0, fs));
+        check (above < 1.0, fmt ("saturate 300-900 Hz, drive %2.0f dB: %.2f%% of the added energy lies above the span (%.0f%% below it or in the band)",
+                                 driveDb, above, notInSpan));
+    }
+
+    FundamentalEngine::Params p;
+    p.lo = 100.0; p.hi = 250.0; p.extGain = 1.0;
+    harmonicsForTone (0.5, p.harmonic);
+    p.ceiling = 10.0 * p.hi;
+    const auto span = harmonicSpan (BandMode::fill, p.lo, p.hi, fs);
+    const auto added = runFund (bandNoise (200000, p.lo, p.hi, 9), p);
+    const auto [notInSpan, above] = outside (added, span);
+    check (above < 3.0 && notInSpan < 30.0,
+           fmt ("fill 100-250 Hz: %.2f%% above the span, %.0f%% of the added energy inside it", above, 100.0 - notInSpan));
+}
+
+// Every sample rate a host might run at: unity at small signal, exact latency compensation, no blow-ups.
+void testSampleRates()
+{
+    std::printf ("\n[1b] Sample rates: small-signal gain, exact latency alignment, stability with all band types\n");
+
+    for (double rate : { 22050.0, 44100.0, 96000.0, 192000.0 })
+    {
+        const auto sine = [&] (double f, double amp, int n)
+        {
+            std::vector<float> x ((size_t) n);
+            for (int i = 0; i < n; ++i)
+                x[(size_t) i] = (float) (amp * std::sin (2.0 * M_PI * f * i / rate));
+            return x;
+        };
+        const auto render = [&] (Engine& eng, const EngineParams& p, const std::vector<float>& in)
+        {
+            std::vector<float> out (in.size());
+            juce::AudioBuffer<float> buf (2, 480);
+            for (size_t pos = 0; pos < in.size(); pos += 480)
+            {
+                const int n = (int) std::min<size_t> (480, in.size() - pos);
+                for (int c = 0; c < 2; ++c)
+                    std::copy_n (in.begin() + (long) pos, n, buf.getWritePointer (c));
+                juce::AudioBuffer<float> view (buf.getArrayOfWritePointers(), 2, n);
+                eng.process (view, p);
+                std::copy_n (buf.getReadPointer (0), n, out.begin() + (long) pos);
+            }
+            return out;
+        };
+
+        // Small signal through a full-range and a narrow saturate band: the input, delayed.
+        Engine eng;
+        eng.prepare (rate, 512, 2);
+        EngineParams p;
+        p.osMode = 2;
+        p.bands[0] = saturateBand (20.0, 20000.0, std::pow (10.0, 18.0 / 20.0));
+        p.bands[1] = saturateBand (200.0, 2000.0, std::pow (10.0, 18.0 / 20.0));
+        const int n = (int) rate;
+        auto quiet = sine (1000.0, 0.001, n);
+        const auto out = render (eng, p, quiet);
+        const int latency = eng.getLatency();
+        double worst = 0.0;
+        for (int i = n / 2; i < n; ++i)
+            worst = std::max (worst, std::fabs ((double) out[(size_t) i] - (double) quiet[(size_t) (i - latency)]));
+
+        // All band types at once, loud, with the bands moving: finite and bounded.
+        EngineParams loud = p;
+        loud.bands[2] = fillBand ({ 50.0, 150.0, 1.0, { 0.5, 0.35, 0.2, 0.1 }, 1500.0, 0.5, 0.8, 0.5, 1.0 });
+        loud.bands[3] = saturateBand (5000.0, 15000.0, std::pow (10.0, 12.0 / 20.0));
+        bool finite = true;
+        float peak = 0.0f;
+        const auto loudIn = sine (80.0, 0.7, n);
+        for (int rep = 0; rep < 4; ++rep)
+        {
+            loud.bands[3].lo = 4000.0 + 500.0 * rep;
+            for (float v : render (eng, loud, loudIn))
+            {
+                finite = finite && std::isfinite (v);
+                peak = std::max (peak, std::fabs (v));
+            }
+        }
+
+        check (worst < 2.0e-6 && finite && peak < 20.0,
+               fmt ("%6.0f Hz: latency %d, small-signal error %.1e (-60 dBFS), loud peak %.2f, finite %s",
+                    rate, latency, worst, peak, finite ? "yes" : "NO"));
+    }
+
+    // The latency is known as soon as the plugin is prepared, not after the first block.
+    Engine eng;
+    eng.prepare (fs, 512, 3);
+    Rig reference (3);
+    reference.run (std::vector<float> (960, 0.0f));
+    check (eng.getLatency() > 0 && eng.getLatency() == reference.eng.getLatency(),
+           fmt ("latency after prepare (8x): %d, same as after the first block: %d", eng.getLatency(), reference.eng.getLatency()));
+}
+
 void benchmark()
 {
     std::printf ("\n[11] CPU: 10 s of stereo @ 48 kHz, all six bands on (4 saturate, 2 adaptive fill with rebuild)\n");
@@ -699,6 +866,7 @@ void benchmark()
 int main()
 {
     testTransparency();
+    testSampleRates();
     testLatencyAlignment();
     testAliasing();
     testEvenOdd();
@@ -707,6 +875,7 @@ int main()
     testExtendNoteOff();
     testToneWeights();
     testNyquistGuard();
+    testHarmonicSpan();
     testAdaptiveFill();
     testRestore();
     testBassStaysCentred();
