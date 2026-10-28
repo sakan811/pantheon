@@ -15,29 +15,38 @@ namespace id
     inline constexpr const char* delta = "delta";
     inline constexpr const char* match = "match";
 
-    inline constexpr const char* satOn = "satOn";
+    // Saturate bands share one character.
     inline constexpr const char* curve = "curve";
     inline constexpr const char* even = "even";
-    inline constexpr const char* driveLow = "driveLow";
-    inline constexpr const char* driveMid = "driveMid";
-    inline constexpr const char* driveHigh = "driveHigh";
-    inline constexpr const char* xoverLow = "xoverLow";
-    inline constexpr const char* xoverHigh = "xoverHigh";
-
-    inline constexpr const char* fundLo = "fundLo";
-    inline constexpr const char* fundHi = "fundHi";
-    inline constexpr const char* extAmount = "extAmount";
-    inline constexpr const char* h2 = "h2";
-    inline constexpr const char* h3 = "h3";
-    inline constexpr const char* h4 = "h4";
-    inline constexpr const char* h5 = "h5";
-    inline constexpr const char* ceiling = "ceiling";
-    inline constexpr const char* resAmount = "resAmount";
-    inline constexpr const char* resFill = "resFill";
 }
 
-constexpr float offDb = -60.0f;         // bottom of the Amount controls; treated as off
-constexpr float harmonicOffDb = -48.0f; // bottom of the H2..H5 weights; treated as off
+// The parameters of one band. Ids are "b1_lo" ... "b6_rebuild": the strings are built once and kept,
+// so the audio thread can look parameters up without allocating.
+struct BandIds
+{
+    juce::String on, mode, lo, hi;   // every band
+    juce::String drive;              // saturate
+    juce::String amount, tone, adapt, rebuild; // fill
+};
+
+inline const BandIds& bandIds (int band)
+{
+    static const auto table = []
+    {
+        std::array<BandIds, maxBands> t;
+        for (int i = 0; i < maxBands; ++i)
+        {
+            const auto name = [i] (const char* field) { return "b" + juce::String (i + 1) + "_" + field; };
+            t[(size_t) i] = { name ("on"), name ("mode"), name ("lo"), name ("hi"), name ("drive"),
+                              name ("amount"), name ("tone"), name ("adapt"), name ("rebuild") };
+        }
+        return t;
+    }();
+    return table[(size_t) std::clamp (band, 0, maxBands - 1)];
+}
+
+constexpr float offDb = -60.0f;       // bottom of the Rebuild control; treated as off
+constexpr float fillOffDb = -30.0f;   // bottom of a fill band's Amount; treated as off
 
 // True when a dB control sits at its minimum (within one display step), i.e. the feature is off.
 inline bool isOff (float db, float floorDb = offDb) noexcept { return db <= floorDb + 0.05f; }
@@ -57,6 +66,15 @@ inline bool isGlobalParameter (const juce::String& paramId)
             return true;
     return false;
 }
+
+// What a band looks like before anyone touches it: band 1 starts as a gentle full-range saturator
+// (the plugin does something useful on first load), the rest are free slots.
+struct BandDefaults { bool on; float lo, hi; };
+inline constexpr BandDefaults bandDefaults (int band) noexcept
+{
+    return band == 0 ? BandDefaults { true, 20.0f, 20000.0f } : BandDefaults { false, 100.0f, 1000.0f };
+}
+inline constexpr float defaultDriveDb = 4.0f, defaultAmountDb = -9.0f;
 
 inline juce::AudioProcessorValueTreeState::ParameterLayout createLayout()
 {
@@ -87,20 +105,18 @@ inline juce::AudioProcessorValueTreeState::ParameterLayout createLayout()
     const auto pctAttr = [&] { return Attr().withStringFromValueFunction (pctText); };
     const auto gainAttr = [] { return Attr().withStringFromValueFunction ([] (float v, int) { return String (v, 1) + " dB"; }); };
 
-    const auto amountAttr = [&] { return dbAttr (offDb); };
-    const auto harmonicAttr = [&] { return dbAttr (harmonicOffDb); };
-
-    const auto F = [&] (const char* pid, const char* name, NormalisableRange<float> r, float def, Attr a)
+    // Parameters added after the first release carry a higher version, as hosts expect.
+    const auto F = [&] (const String& pid, const String& name, NormalisableRange<float> r, float def, Attr a, int version = 1)
     {
-        p.push_back (std::make_unique<Float> (ParameterID { pid, 1 }, name, r, def, a));
+        p.push_back (std::make_unique<Float> (ParameterID { pid, version }, name, r, def, a));
     };
-    const auto Choice = [&] (const char* pid, const char* name, StringArray items, int def)
+    const auto Choice = [&] (const String& pid, const String& name, StringArray items, int def, int version = 1)
     {
-        p.push_back (std::make_unique<AudioParameterChoice> (ParameterID { pid, 1 }, name, items, def));
+        p.push_back (std::make_unique<AudioParameterChoice> (ParameterID { pid, version }, name, items, def));
     };
-    const auto Bool = [&] (const char* pid, const char* name, bool def)
+    const auto Bool = [&] (const String& pid, const String& name, bool def, int version = 1)
     {
-        p.push_back (std::make_unique<AudioParameterBool> (ParameterID { pid, 1 }, name, def));
+        p.push_back (std::make_unique<AudioParameterBool> (ParameterID { pid, version }, name, def));
     };
 
     // Global
@@ -112,27 +128,28 @@ inline juce::AudioProcessorValueTreeState::ParameterLayout createLayout()
     Bool (id::delta, "Delta", false);
     Bool (id::match, "Gain Match", false);
 
-    // Saturator
-    Bool (id::satOn, "Saturation", true);
+    // Character shared by every saturate band
     Choice (id::curve, "Curve", { "Tanh", "Atan", "Soft" }, 0);
     F (id::even, "Even Harmonics", { 0.0f, 100.0f, 1.0f }, 25.0f, pctAttr());
-    F (id::driveLow,  "Drive Low",  { 0.0f, 24.0f, 0.1f }, 3.0f, gainAttr());
-    F (id::driveMid,  "Drive Mid",  { 0.0f, 24.0f, 0.1f }, 3.0f, gainAttr());
-    F (id::driveHigh, "Drive High", { 0.0f, 24.0f, 0.1f }, 3.0f, gainAttr());
-    F (id::xoverLow,  "Crossover Low",  freq (60.0f, 500.0f, 150.0f), 150.0f, hzAttr());
-    F (id::xoverHigh, "Crossover High", freq (1500.0f, 12000.0f, 3500.0f), 3500.0f, hzAttr());
 
-    // Fundamental engine
-    F (id::fundLo, "Bass Range Low",  freq (25.0f, 120.0f, 50.0f), 40.0f, hzAttr());
-    F (id::fundHi, "Bass Range High", freq (60.0f, 250.0f, 120.0f), 120.0f, hzAttr());
-    F (id::extAmount, "Harmonic Bass", { offDb, 6.0f, 0.1f }, offDb, amountAttr());
-    F (id::h2, "H2", { harmonicOffDb, 0.0f, 0.1f }, -6.0f, harmonicAttr());
-    F (id::h3, "H3", { harmonicOffDb, 0.0f, 0.1f }, -9.0f, harmonicAttr());
-    F (id::h4, "H4", { harmonicOffDb, 0.0f, 0.1f }, -15.0f, harmonicAttr());
-    F (id::h5, "H5", { harmonicOffDb, 0.0f, 0.1f }, -22.0f, harmonicAttr());
-    F (id::ceiling, "Harmonic Ceiling", freq (300.0f, 3000.0f, 1000.0f), 1200.0f, hzAttr());
-    F (id::resAmount, "Fundamental Restore", { offDb, 6.0f, 0.1f }, offDb, amountAttr());
-    F (id::resFill, "Fill Gaps Only", { 0.0f, 100.0f, 1.0f }, 70.0f, pctAttr());
+    // Bands
+    constexpr int bandVersion = 2;
+    for (int i = 0; i < maxBands; ++i)
+    {
+        const auto& ids = bandIds (i);
+        const auto d = bandDefaults (i);
+        const auto label = [i] (const char* what) { return "Band " + String (i + 1) + " " + what; };
+
+        Bool (ids.on, label ("On"), d.on, bandVersion);
+        Choice (ids.mode, label ("Mode"), { "Saturate", "Harmonic Fill" }, 0, bandVersion);
+        F (ids.lo, label ("Low"),  freq (20.0f, 20000.0f, 1000.0f), d.lo, hzAttr(), bandVersion);
+        F (ids.hi, label ("High"), freq (20.0f, 20000.0f, 1000.0f), d.hi, hzAttr(), bandVersion);
+        F (ids.drive,   label ("Drive"),   { 0.0f, 24.0f, 0.1f }, i == 0 ? 3.0f : defaultDriveDb, gainAttr(), bandVersion);
+        F (ids.amount,  label ("Amount"),  { fillOffDb, 6.0f, 0.1f }, defaultAmountDb, dbAttr (fillOffDb), bandVersion);
+        F (ids.tone,    label ("Tone"),    { 0.0f, 100.0f, 1.0f }, 50.0f, pctAttr(), bandVersion);
+        F (ids.adapt,   label ("Adapt"),   { 0.0f, 100.0f, 1.0f }, 100.0f, pctAttr(), bandVersion);
+        F (ids.rebuild, label ("Rebuild"), { offDb, 6.0f, 0.1f }, offDb, dbAttr (offDb), bandVersion);
+    }
 
     return { p.begin(), p.end() };
 }
@@ -141,6 +158,7 @@ inline juce::AudioProcessorValueTreeState::ParameterLayout createLayout()
 inline EngineParams readParams (juce::AudioProcessorValueTreeState& s)
 {
     const auto v = [&] (const char* pid) { return s.getRawParameterValue (pid)->load(); };
+    const auto vb = [&] (const juce::String& pid) { return s.getRawParameterValue (pid)->load(); };
     const auto gain = [] (float db) { return (double) juce::Decibels::decibelsToGain (db); };
 
     EngineParams e;
@@ -151,33 +169,118 @@ inline EngineParams readParams (juce::AudioProcessorValueTreeState& s)
     e.osMode = (int) v (id::oversampling);
     e.delta = v (id::delta) > 0.5f;
     e.match = v (id::match) > 0.5f;
-    e.satOn = v (id::satOn) > 0.5f;
+    e.curve = (int) v (id::curve);
+    e.bias = 0.8 * v (id::even) * 0.01;
 
-    e.sat.curve = (int) v (id::curve);
-    e.sat.bias = 0.8 * v (id::even) * 0.01;
-    e.sat.drive[0] = gain (v (id::driveLow));
-    e.sat.drive[1] = gain (v (id::driveMid));
-    e.sat.drive[2] = gain (v (id::driveHigh));
-    e.sat.xoverLow = v (id::xoverLow);
-    e.sat.xoverHigh = v (id::xoverHigh);
+    for (int i = 0; i < maxBands; ++i)
+    {
+        const auto& ids = bandIds (i);
+        auto& b = e.bands[(size_t) i];
+        b.on = vb (ids.on) > 0.5f;
+        b.mode = (BandMode) (int) vb (ids.mode);
+        b.lo = vb (ids.lo);
+        b.hi = vb (ids.hi);
+        b.drive = gain (vb (ids.drive));
 
-    e.fund.lo = v (id::fundLo);
-    e.fund.hi = v (id::fundHi); // the engine applies effectiveRangeHigh()
-    e.fund.extGain = gainOrOff (v (id::extAmount));
-    int h = 0;
-    for (auto* pid : { id::h2, id::h3, id::h4, id::h5 })
-        e.fund.harmonic[h++] = gainOrOff (v (pid), harmonicOffDb);
-    e.fund.ceiling = v (id::ceiling);
-    e.fund.resGain = gainOrOff (v (id::resAmount));
-    e.fund.fill = v (id::resFill) * 0.01;
+        // Amount is the harmonics' total energy relative to the band's (the tone weights carry
+        // unit energy), which is also the level the adaptive fill aims to keep above the band.
+        auto& f = b.fill;
+        f.extGain = gainOrOff (vb (ids.amount), fillOffDb);
+        harmonicsForTone (vb (ids.tone) * 0.01, f.harmonic);
+        f.target = f.extGain * f.extGain;
+        f.adapt = vb (ids.adapt) * 0.01;
+        f.ceiling = 10.0 * b.hi;
+        f.resGain = gainOrOff (vb (ids.rebuild));
+        f.fill = 0.8;
+    }
     return e;
 }
+
+// Sessions saved before bands existed had three fixed saturator bands and one bass engine. They
+// become three saturate bands and one fill band, so an old project still sounds like itself.
+inline void migrateLegacyState (juce::ValueTree& state)
+{
+    const auto find = [&] (const char* pid) { return state.getChildWithProperty ("id", pid); };
+    if (! find ("driveLow").isValid() || find (bandIds (0).on.toRawUTF8()).isValid())
+        return;
+
+    const auto old = [&] (const char* pid, float fallback)
+    {
+        const auto node = find (pid);
+        return node.isValid() ? (float) node.getProperty ("value") : fallback;
+    };
+    const auto set = [&] (const juce::String& pid, float value)
+    {
+        juce::ValueTree node ("PARAM");
+        node.setProperty ("id", pid, nullptr);
+        node.setProperty ("value", value, nullptr);
+        state.appendChild (node, nullptr);
+    };
+    const auto saturate = [&] (int band, bool on, float lo, float hi, float driveDb)
+    {
+        const auto& ids = bandIds (band);
+        set (ids.on, on ? 1.0f : 0.0f); set (ids.mode, 0.0f);
+        set (ids.lo, lo); set (ids.hi, hi); set (ids.drive, driveDb);
+    };
+
+    const bool satOn = old ("satOn", 1.0f) > 0.5f;
+    const float xoverLow = old ("xoverLow", 150.0f), xoverHigh = old ("xoverHigh", 3500.0f);
+    saturate (0, satOn, 20.0f, xoverLow, old ("driveLow", 3.0f));
+    saturate (1, satOn, xoverLow, xoverHigh, old ("driveMid", 3.0f));
+    saturate (2, satOn, xoverHigh, 20000.0f, old ("driveHigh", 3.0f));
+
+    // The old H2..H5 weights were relative to the fundamental; Amount is their total energy.
+    double energy = 0.0;
+    const char* weights[] = { "h2", "h3", "h4", "h5" };
+    const float weightDefaults[] = { -6.0f, -9.0f, -15.0f, -22.0f };
+    for (int k = 0; k < 4; ++k)
+    {
+        const float w = old (weights[k], weightDefaults[k]);
+        energy += isOff (w, -48.0f) ? 0.0 : std::pow (10.0, w / 10.0);
+    }
+    const float extDb = old ("extAmount", offDb), resDb = old ("resAmount", offDb);
+    const bool ext = ! isOff (extDb), rest = ! isOff (resDb);
+
+    const auto& fill = bandIds (3);
+    set (fill.on, ext || rest ? 1.0f : 0.0f);
+    set (fill.mode, 1.0f);
+    set (fill.lo, old ("fundLo", 40.0f));
+    set (fill.hi, old ("fundHi", 120.0f));
+    set (fill.amount, ext ? std::clamp (extDb + (float) (10.0 * std::log10 (energy + 1.0e-9)), fillOffDb + 0.1f, 6.0f)
+                          : fillOffDb);
+    set (fill.tone, 50.0f);
+    set (fill.adapt, 0.0f); // the old engine was open-loop; keep it that way
+    set (fill.rebuild, resDb);
+}
+
+using PresetValues = std::vector<std::pair<juce::String, float>>;
 
 struct Preset
 {
     const char* name;
-    std::vector<std::pair<const char*, float>> values; // everything not listed falls back to default
+    PresetValues values; // everything not listed falls back to default
 };
+
+inline PresetValues saturateBand (int band, float lo, float hi, float driveDb)
+{
+    const auto& ids = bandIds (band);
+    return { { ids.on, 1 }, { ids.mode, 0 }, { ids.lo, lo }, { ids.hi, hi }, { ids.drive, driveDb } };
+}
+
+inline PresetValues fillBand (int band, float lo, float hi, float amountDb, float tone, float adapt, float rebuildDb = offDb)
+{
+    const auto& ids = bandIds (band);
+    return { { ids.on, 1 }, { ids.mode, 1 }, { ids.lo, lo }, { ids.hi, hi }, { ids.amount, amountDb },
+             { ids.tone, tone }, { ids.adapt, adapt }, { ids.rebuild, rebuildDb } };
+}
+
+inline PresetValues join (std::initializer_list<PresetValues> parts)
+{
+    PresetValues all;
+    for (auto& part : parts)
+        all.insert (all.end(), part.begin(), part.end());
+    return all;
+}
 
 inline const std::vector<Preset>& presets()
 {
@@ -185,20 +288,22 @@ inline const std::vector<Preset>& presets()
     static const std::vector<Preset> list
     {
         { "Init", {} },
-        { "Master Glue",         { { curve, 0 }, { even, 20 }, { driveLow, 3 }, { driveMid, 3 }, { driveHigh, 2 } } },
-        { "Warm Tube",           { { curve, 0 }, { even, 65 }, { driveLow, 5 }, { driveMid, 5 }, { driveHigh, 3 } } },
-        { "Tape Body",           { { curve, 1 }, { even, 10 }, { driveLow, 7 }, { driveMid, 4 }, { driveHigh, 2 },
-                                   { extAmount, -12 }, { fundLo, 40 }, { fundHi, 100 }, { h2, -6 }, { h3, -12 } } },
-        { "Air Exciter",         { { curve, 2 }, { even, 35 }, { driveLow, 0 }, { driveMid, 2 }, { driveHigh, 10 } } },
-        { "Missing Fundamental", { { driveLow, 1 }, { driveMid, 2 }, { driveHigh, 1 }, { even, 20 },
-                                   { extAmount, -6 }, { fundLo, 35 }, { fundHi, 110 },
-                                   { resAmount, -9 }, { resFill, 80 } } },
-        { "Small-Speaker Bass",  { { driveLow, 2 }, { driveMid, 2 }, { driveHigh, 1 },
-                                   { extAmount, 0 }, { fundLo, 50 }, { fundHi, 160 }, { ceiling, 1500 },
-                                   { h2, -4 }, { h3, -6 }, { h4, -12 }, { h5, -18 } } },
-        { "808 Sub Fill",        { { driveLow, 4 }, { driveMid, 1 }, { driveHigh, 0 },
-                                   { extAmount, -8 }, { fundLo, 30 }, { fundHi, 90 }, { ceiling, 800 },
-                                   { h2, -3 }, { h3, -10 }, { h4, -48 }, { h5, -48 } } },
+        { "Master Glue",         join ({ { { curve, 0 }, { even, 20 } }, saturateBand (0, 20, 20000, 3) }) },
+        { "Warm Tube",           join ({ { { curve, 0 }, { even, 65 } }, saturateBand (0, 20, 20000, 5) }) },
+        { "Tape Body",           join ({ { { curve, 1 }, { even, 10 } },
+                                         saturateBand (0, 40, 400, 7), saturateBand (1, 400, 3500, 4), saturateBand (2, 3500, 20000, 2),
+                                         fillBand (3, 40, 100, -12, 40, 100) }) },
+        { "Air Exciter",         join ({ { { curve, 2 }, { even, 35 } },
+                                         saturateBand (0, 150, 3500, 2), saturateBand (1, 3500, 20000, 10) }) },
+        { "Missing Fundamental", join ({ { { curve, 0 }, { even, 20 } },
+                                         saturateBand (0, 20, 150, 1), saturateBand (1, 150, 3500, 2), saturateBand (2, 3500, 20000, 1),
+                                         fillBand (3, 35, 110, -6, 50, 100, -9) }) },
+        { "Small-Speaker Bass",  join ({ { { curve, 0 }, { even, 25 } },
+                                         saturateBand (0, 20, 20000, 2),
+                                         fillBand (1, 50, 160, 0, 60, 100) }) },
+        { "808 Sub Fill",        join ({ { { curve, 0 }, { even, 25 } },
+                                         saturateBand (0, 30, 150, 4),
+                                         fillBand (1, 30, 90, -8, 15, 100) }) },
     };
     return list;
 }
@@ -210,6 +315,73 @@ inline void setParameter (juce::RangedAudioParameter& param, float normalised)
     param.setValueNotifyingHost (normalised);
     param.endChangeGesture();
 }
+
+// Sets a parameter to a real (not normalised) value.
+inline void setParameterValue (juce::AudioProcessorValueTreeState& s, const juce::String& pid, float value)
+{
+    if (auto* param = s.getParameter (pid))
+        setParameter (*param, param->convertTo0to1 (value));
+}
+
+inline bool isBandOn (juce::AudioProcessorValueTreeState& s, int band)
+{
+    return s.getRawParameterValue (bandIds (band).on)->load() > 0.5f;
+}
+
+inline BandMode bandMode (juce::AudioProcessorValueTreeState& s, int band)
+{
+    return (BandMode) (int) s.getRawParameterValue (bandIds (band).mode)->load();
+}
+
+// The range a band really covers (see effectiveRange), from its parameters.
+inline Range bandRange (juce::AudioProcessorValueTreeState& s, int band)
+{
+    const auto& ids = bandIds (band);
+    return effectiveRange (bandMode (s, band), s.getRawParameterValue (ids.lo)->load(), s.getRawParameterValue (ids.hi)->load());
+}
+
+// Puts a new band into the first free slot, centred on `centreHz` with a sensible width, and every
+// other control of the slot back at its default. Uses `preferredSlot` if that one is free, else the
+// first free slot. Returns the slot, or -1 when all are in use.
+inline int addBand (juce::AudioProcessorValueTreeState& s, BandMode mode, double centreHz, int preferredSlot = -1)
+{
+    int slot = -1;
+    if (preferredSlot >= 0 && preferredSlot < maxBands && ! isBandOn (s, preferredSlot))
+        slot = preferredSlot;
+    for (int i = 0; slot < 0 && i < maxBands; ++i)
+        if (! isBandOn (s, i))
+            slot = i;
+
+    if (slot >= 0)
+    {
+        const int i = slot;
+        const auto& ids = bandIds (i);
+        for (auto* pid : { &ids.drive, &ids.amount, &ids.tone, &ids.adapt, &ids.rebuild })
+            if (auto* param = s.getParameter (*pid))
+                setParameter (*param, param->getDefaultValue());
+
+        const double width = mode == BandMode::fill ? 1.5 : 1.8;
+        const auto range = effectiveRange (mode, std::clamp (centreHz / width, 20.0, 20000.0),
+                                           std::clamp (centreHz * width, 20.0, 20000.0));
+        setParameterValue (s, ids.mode, (float) (int) mode);
+        setParameterValue (s, ids.lo, (float) range.lo);
+        setParameterValue (s, ids.hi, (float) range.hi);
+        setParameterValue (s, ids.on, 1.0f);
+    }
+    return slot;
+}
+
+// Switching to fill can shrink the range (see effectiveRange): write what the band really covers back.
+inline void setBandMode (juce::AudioProcessorValueTreeState& s, int band, BandMode mode)
+{
+    const auto& ids = bandIds (band);
+    setParameterValue (s, ids.mode, (float) (int) mode);
+    const auto r = bandRange (s, band);
+    setParameterValue (s, ids.lo, (float) r.lo);
+    setParameterValue (s, ids.hi, (float) r.hi);
+}
+
+inline void removeBand (juce::AudioProcessorValueTreeState& s, int band) { setParameterValue (s, bandIds (band).on, 0.0f); }
 
 inline void applyPreset (juce::AudioProcessorValueTreeState& s, int index)
 {
@@ -224,7 +396,6 @@ inline void applyPreset (juce::AudioProcessorValueTreeState& s, int index)
                 setParameter (*ranged, ranged->getDefaultValue());
 
     for (auto& [pid, value] : list[(size_t) index].values)
-        if (auto* ranged = s.getParameter (pid))
-            setParameter (*ranged, ranged->convertTo0to1 (value));
+        setParameterValue (s, pid, value);
 }
 }

@@ -76,6 +76,7 @@ void HephaestusProcessor::setStateInformation (const void* data, int size)
         if (xml->hasTagName (apvts.state.getType()))
         {
             auto tree = juce::ValueTree::fromXml (*xml);
+            hep::migrateLegacyState (tree);
             currentProgram = (int) tree.getProperty ("program", 0);
             apvts.replaceState (tree);
         }
