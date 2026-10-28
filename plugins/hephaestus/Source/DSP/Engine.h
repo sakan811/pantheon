@@ -65,7 +65,8 @@ class Engine
 public:
     static constexpr int maxChannels = 2;
 
-    void prepare (double sampleRate, int maxBlockSize)
+    // `initialOsMode` (if given) sets the reported latency right away; otherwise it is only known after the first block.
+    void prepare (double sampleRate, int maxBlockSize, int initialOsMode = -1)
     {
         fs = sampleRate;
         maxBlock = maxBlockSize;
@@ -95,6 +96,9 @@ public:
         matchGain = 1.0;
         inGainLast = outGainLast = 1.0f;
         reset();
+
+        if (initialOsMode >= 0)
+            applyLatencyFor (std::clamp (initialOsMode, 0, Saturator::numOsModes - 1));
     }
 
     void reset()

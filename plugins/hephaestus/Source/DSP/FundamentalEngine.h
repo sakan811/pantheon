@@ -317,8 +317,9 @@ private:
         gaps.setup (fs, lo, hi);
 
         // A harmonic that would land too close to Nyquist would alias, so it is dropped.
+        const int highest = highestHarmonic (hi, fs);
         for (int k = 0; k < 4; ++k)
-            usable[k] = (k + 2) * hi < 0.48 * fs ? 1.0 : 0.0;
+            usable[k] = k + 2 <= highest ? 1.0 : 0.0;
 
         // Release spans several periods of the lowest frequency: shorter and the envelope ripples
         // at the bass period, which amplitude-modulates the generated harmonics.
