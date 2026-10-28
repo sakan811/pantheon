@@ -140,6 +140,12 @@ bool ThemisProcessor::readLowCrest (float& outDb) const
     return true;
 }
 
+bool ThemisProcessor::readClip (themis::ClipTotals& out) const
+{
+    out = analyzer.clipTotals();
+    return out.have;
+}
+
 themis::TargetCurve ThemisProcessor::activeTarget() const
 {
     const auto& built = themis::TargetCurve::builtIns();

@@ -28,6 +28,15 @@ inline juce::Font font (float height, int styleFlags = juce::Font::plain)
 {
     return juce::Font (juce::FontOptions (height, styleFlags));
 }
+
+inline juce::String signedDb (float v) { return (v >= 0.0f ? "+" : "") + juce::String (v, 1) + " dB"; }
+
+inline juce::String hzText (double hz)
+{
+    if (hz >= 10000.0)
+        return juce::String (juce::roundToInt (hz / 1000.0)) + " kHz";
+    return hz >= 1000.0 ? juce::String (hz / 1000.0, 1) + " kHz" : juce::String (juce::roundToInt (hz)) + " Hz";
+}
 } // namespace ui
 
 class ThemisLookAndFeel : public juce::LookAndFeel_V4

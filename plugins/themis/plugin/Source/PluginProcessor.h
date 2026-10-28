@@ -48,7 +48,7 @@ public:
     // ---- shared with the editor (message thread unless noted) ----
     void resetAnalyzer()
     {
-        analyzer.requestReset();
+        analyzer.requestReset(); // also restarts the clip totals and the history graphs
         lowCrest.requestReset();
         scope.requestReset();
     }
@@ -72,6 +72,9 @@ public:
 
     // Low-end (20-250 Hz) crest factor in dB. Returns false until enough audio has been measured.
     bool readLowCrest (float& outDb) const;
+
+    // Peaks and clipping of everything that has played since the last reset. Returns false until audio has been measured.
+    bool readClip (themis::ClipTotals& out) const;
 
     // Stereo image: raw L/R samples for the vectorscope and the smoothed phase correlation (-1..+1).
     const themis::StereoScope& stereoScope() const { return scope; }

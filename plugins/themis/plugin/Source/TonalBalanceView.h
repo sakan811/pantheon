@@ -4,6 +4,8 @@
 #include "MeterCell.h"
 #include "ThemisLookAndFeel.h"
 
+#include <themis/HistoryChecks.h>
+
 #include <cstring>
 
 // The reference-curve display: long-term spectrum of the signal against the target band.
@@ -30,8 +32,10 @@ public:
         float hz = 0.0f, tilt = 0.0f;
         bool noHarmonics = false;
         latestFundamental (hz, tilt, noHarmonics);
+        themis::ClipTotals clipNow;
+        const bool haveClipNow = proc.readClip (clipNow);
 
-        const bool changed = have != haveData || havePhaseNow != havePhase || (havePhaseNow && differs (ph, phaseBands)) || differs (hz, fundamentalHz)
+        const bool changed = have != haveData || haveClipNow != haveClip || (haveClipNow && clipNow != clipTotals) || havePhaseNow != havePhase || (havePhaseNow && differs (ph, phaseBands)) || differs (hz, fundamentalHz)
                              || differs (tilt, fundamentalTiltDb) || noHarmonics != noFundamentalHarmonics
                              || haveFoldNow != haveFold || (haveFoldNow && differs (f, fold)) || dev != deviceIndex || (have && differs (m, measured)) || haveCrestNow != haveCrest
                              || (haveCrestNow && differs (crest, lowCrestDb)) || t.name != target.name
@@ -40,6 +44,9 @@ public:
         if (!changed)
             return;
         haveData = have;
+        haveClip = haveClipNow;
+        if (haveClipNow)
+            clipTotals = clipNow;
         haveFold = haveFoldNow;
         deviceIndex = dev;
         haveCrest = haveCrestNow;
@@ -120,9 +127,9 @@ public:
     juce::String getTooltip() override
     {
         if (overBroadbandStrip && !overTranslationStrip)
-            return fundamentalHz > 0.0f ? "FUNDAMENTAL: the lowest tonal bass peak (" + hzText (fundamentalHz) + ") is "
+            return fundamentalHz > 0.0f ? "FUNDAMENTAL: the lowest tonal bass peak (" + ui::hzText (fundamentalHz) + ") is "
                                               + (noFundamentalHarmonics ? juce::String ("the only tonal component found: no harmonics. ")
-                                                                        : signedDb (fundamentalTiltDb) + " against its harmonics. ")
+                                                                        : ui::signedDb (fundamentalTiltDb) + " against its harmonics. ")
                                               + "Sub-heavy bass has little above it for small speakers to play; harmonic-rich bass is carried by its upper partials. "
                                                 "See the FUNDAMENTAL graph for how it moves."
                                         : juce::String();
@@ -130,14 +137,16 @@ public:
             return {};
         juce::StringArray lines;
         if (report.haveDevice && device != nullptr)
-            lines.add (juce::String (device->name) + ": the track changes by " + signedDb (report.deviceChangeDb) + " overall, the target by "
-                       + signedDb (report.referenceChangeDb) + ". Positive DEVICE LOSS means this track depends more on what the device cannot "
+            lines.add (juce::String (device->name) + ": the track changes by " + ui::signedDb (report.deviceChangeDb) + " overall, the target by "
+                       + ui::signedDb (report.referenceChangeDb) + ". Positive DEVICE LOSS means this track depends more on what the device cannot "
                          "reproduce than the target does.");
         if (report.haveFold)
             lines.add ("MONO FOLD is the power lost when the channels are summed (0 dB = mono-safe, 3 dB = uncorrelated, more = phase "
                        "cancellation). The coloured strip under the curve shows it per band.");
         if (phase.have)
             lines.add (phaseTooltip());
+        if (haveClip)
+            lines.add (clipTooltip());
         lines.add ("Device responses are generic approximations, and the limits are rules of thumb; neither is measured data. "
                    "Nothing here changes the audio.");
         return lines.joinIntoString ("\n");
@@ -151,14 +160,6 @@ private:
     static constexpr float kTopDb = 12.0f, kBottomDb = -30.0f;
     static constexpr float kStripHeight = 44.0f;
     static constexpr float kFoldStripHeight = 5.0f; // the mono-fold strip along the bottom of the plot (and the phase region outline around it)
-
-    static juce::String signedDb (float v) { return (v >= 0.0f ? "+" : "") + juce::String (v, 1) + " dB"; }
-    static juce::String hzText (double hz)
-    {
-        if (hz >= 10000.0)
-            return juce::String (juce::roundToInt (hz / 1000.0)) + " kHz";
-        return hz >= 1000.0 ? juce::String (hz / 1000.0, 1) + " kHz" : juce::String (juce::roundToInt (hz)) + " Hz";
-    }
 
     // Display slope in the style of FabFilter Pro-Q's analyzer (4.5 dB/oct). The analysis is constant-Q
     // band energy, where pink noise (-3 dB/oct power density) is flat, so Pro-Q's 4.5 dB/oct reads as
@@ -309,7 +310,7 @@ private:
             const float pos = static_cast<float> (juce::jlimit (-1.0, 1.0, delta / (tol * 3.0))) * half;
             ui::MeterCell::fillSpan (g, bar, centre - half / 3.0f, centre + half / 3.0f, colours::accent.withAlpha (0.35f)); // in-tolerance zone
             ui::MeterCell::drawMarker (g, bar, centre + pos, c);
-            cell.drawReadout (g, signedDb (static_cast<float> (delta)), c);
+            cell.drawReadout (g, ui::signedDb (static_cast<float> (delta)), c);
         }
     }
 
@@ -369,7 +370,8 @@ private:
         g.fillPath (dashed);
         g.restoreState();
         g.setFont (ui::font (12.0f));
-        g.drawText ("Via " + juce::String (device->name), annotationRow (1, false), juce::Justification::left);
+        g.drawText ("Via " + juce::String (device->name) + "  (plays " + ui::hzText (deviceLoHz) + " - " + ui::hzText (deviceHiHz) + ")", annotationRow (1, false),
+                    juce::Justification::left);
     }
 
     // A thin strip along the bottom of the plot: how much of each band's power would be lost in a mono sum.
@@ -414,12 +416,13 @@ private:
             drawPhase (g, cell (4));
         else
             cell (4).drawNote (g, "PHASE CHECK", "measuring...", colours::dim);
+        drawClip (g, cell (5));
         if (!haveData)
             return;
 
         if (report.haveDevice)
             drawMeter (g, cell (0), "DEVICE LOSS", report.extraLossDb, tr::kDeviceWarnDb, tr::kDeviceBadDb, report.deviceLevel,
-                       signedDb (report.extraLossDb) + " vs target");
+                       ui::signedDb (report.extraLossDb) + " vs target");
         else
             cell (0).drawNote (g, "DEVICE LOSS", "choose a device", colours::dim);
 
@@ -431,7 +434,7 @@ private:
                        "-" + juce::String (report.lowMonoLossDb, 1) + " dB < " + juce::String (juce::roundToInt (tr::kLowEndHz)) + " Hz");
             if (report.worstBand >= 0)
                 cell (3).drawNote (g, "WORST BAND",
-                                   hzText (themis::BandGrid::centreHz (report.worstBand)) + "  -" + juce::String (report.worstBandLossDb, 1) + " dB",
+                                   ui::hzText (themis::BandGrid::centreHz (report.worstBand)) + "  -" + juce::String (report.worstBandLossDb, 1) + " dB",
                                    colours::forLevel (tr::bandMonoLevel (report.worstBand, report.worstBandLossDb)));
             else
                 cell (3).drawNote (g, "WORST BAND", "-", colours::dim);
@@ -440,8 +443,45 @@ private:
         {
             cell (1).drawNote (g, "MONO FOLD", "measuring...", colours::dim);
         }
+    }
 
-        cell (5).drawNote (g, "DEVICE RANGE", device != nullptr ? hzText (deviceLoHz) + " - " + hzText (deviceHiHz) : juce::String ("-"), colours::dim);
+    // Peaks and clipping since the last reset: a true-peak meter whose zones are the verdict's limits, and the clip count.
+    // The PEAKS tab of the LEVEL graph shows when it happened.
+    void drawClip (juce::Graphics& g, const ui::MeterCell& cell) const
+    {
+        namespace clip = themis::history::clip;
+        if (!haveClip)
+        {
+            cell.drawNote (g, "CLIPPING", "measuring...", colours::dim);
+            return;
+        }
+        constexpr float kLowDb = -9.0f, kHighDb = 3.0f; // scale ends
+        cell.drawTitle (g, "CLIPPING");
+        const auto bar = cell.drawTrack (g);
+        const auto xAt = [&] (float db) { return bar.getX() + bar.getWidth() * (juce::jlimit (kLowDb, kHighDb, db) - kLowDb) / (kHighDb - kLowDb); };
+        ui::MeterCell::fillSpan (g, bar, bar.getX(), xAt (clip::kTruePeakWarnDb), colours::good.withAlpha (0.25f));
+        ui::MeterCell::fillSpan (g, bar, xAt (clip::kTruePeakWarnDb), xAt (clip::kTruePeakBadDb), colours::warn.withAlpha (0.25f));
+        ui::MeterCell::fillSpan (g, bar, xAt (clip::kTruePeakBadDb), bar.getRight(), colours::bad.withAlpha (0.25f));
+        const auto level = clip::level (clipTotals.truePeakDb, clipTotals.clipEvents, clipTotals.overSamples);
+        const auto c = colours::forLevel (level);
+        ui::MeterCell::drawMarker (g, bar, xAt (clipTotals.truePeakDb), c);
+        const juce::String count = clipTotals.clipEvents >= 1000 ? juce::String (static_cast<double> (clipTotals.clipEvents) / 1000.0, 1) + "k" : juce::String (static_cast<juce::int64> (clipTotals.clipEvents));
+        cell.drawReadout (g, juce::String (clipTotals.truePeakDb, 1) + " dBTP  "
+                                 + (clipTotals.clipEvents > 0 ? count + " clips" : clipTotals.overSamples > 0 ? juce::String ("over 0 dB") : juce::String ("clean")),
+                          c);
+    }
+
+    juce::String clipTooltip() const
+    {
+        namespace clip = themis::history::clip;
+        juce::String text = "CLIPPING since the last reset: sample peak " + juce::String (clipTotals.samplePeakDb, 1) + " dBFS, true peak (the waveform between the samples, 4x oversampled) "
+                            + juce::String (clipTotals.truePeakDb, 1) + " dBTP. "
+                            + juce::String (static_cast<juce::int64> (clipTotals.clipEvents)) + " flat-topped clips (" + juce::String (static_cast<juce::int64> (clipTotals.clipSamples))
+                            + " samples) and " + juce::String (static_cast<juce::int64> (clipTotals.overSamples)) + " samples at or over 0 dBFS. ";
+        text += "Any clip or over is bad, a true peak above " + juce::String (clip::kTruePeakWarnDb, 0) + " dBTP is a warning (lossy encoding can push it over) and above "
+                + juce::String (clip::kTruePeakBadDb, 0) + " dBTP bad: rules of thumb. A synthesised square wave or a held level also looks like a flat top. "
+                  "The PEAKS tab of the LEVEL graph shows when it happened.";
+        return text;
     }
 
     // Outlines the widest cancelling region on the mono-fold strip.
@@ -463,7 +503,7 @@ private:
             case themis::PhaseCause::delay: return "Delay " + juce::String (p.delayMs, 2) + " ms";
             case themis::PhaseCause::other: break;
         }
-        return hzText (p.loHz) + " - " + hzText (p.hiHz);
+        return ui::hzText (p.loHz) + " - " + ui::hzText (p.hiHz);
     }
 
     // Does a mono sum lose more than uncorrelated channels would, and why.
@@ -474,7 +514,7 @@ private:
 
     juce::String phaseTooltip() const
     {
-        const auto where = hzText (phase.loHz) + " - " + hzText (phase.hiHz);
+        const auto where = ui::hzText (phase.loHz) + " - " + ui::hzText (phase.hiHz);
         const auto depth = juce::String (phase.flaggedBands) + (phase.flaggedBands == 1 ? " band" : " bands") + " lose up to "
                            + juce::String (phase.worstLossDb, 1) + " dB in a mono sum";
         switch (phase.cause)
@@ -486,7 +526,7 @@ private:
                        + ". " + depth + "; the outlined region (" + where + ") is the widest. Check a polarity / phase-invert switch.";
             case themis::PhaseCause::delay:
                 return "PHASE CHECK: one channel (" + juce::String (phase.leftLate ? "left" : "right") + ") is about " + juce::String (phase.delayMs, 2)
-                       + " ms late, which makes a comb filter with the first notch near " + hzText (phase.notchHz) + " in mono. " + depth
+                       + " ms late, which makes a comb filter with the first notch near " + ui::hzText (phase.notchHz) + " in mono. " + depth
                        + "; widest region " + where + ".";
             case themis::PhaseCause::other:
                 break;
@@ -524,7 +564,7 @@ private:
         }
         using themis::fundamental::Balance;
         const auto balance = noFundamentalHarmonics ? Balance::subHeavy : themis::fundamental::balanceOf (fundamentalTiltDb);
-        cell.drawNote (g, "FUNDAMENTAL", hzText (fundamentalHz) + "  " + themis::fundamental::name (balance), colours::text);
+        cell.drawNote (g, "FUNDAMENTAL", ui::hzText (fundamentalHz) + "  " + themis::fundamental::name (balance), colours::text);
     }
 
     void drawHover (juce::Graphics& g) const
@@ -539,14 +579,14 @@ private:
         g.setColour (colours::text);
         g.setFont (ui::font (12.0f));
         const float tilt = tiltDb (hoverBand);
-        juce::String text = hzText (hz) + "   signal " + juce::String (measured[s] + tilt, 1) + "   target " + juce::String (target.medianDb[s] + tilt, 1)
-                            + "   delta " + signedDb (d);
+        juce::String text = ui::hzText (hz) + "   signal " + juce::String (measured[s] + tilt, 1) + "   target " + juce::String (target.medianDb[s] + tilt, 1)
+                            + "   delta " + ui::signedDb (d);
         if (haveFold)
             text += "   mono -" + juce::String (-fold[s], 1) + " dB";
         g.drawText (text, annotationRow (0, true), juce::Justification::right);
         if (device != nullptr)
             g.drawText ("via " + juce::String (device->name) + "   " + juce::String (measured[s] + deviceResponse[s] + tilt, 1) + "   (device "
-                            + signedDb (deviceResponse[s]) + ")",
+                            + ui::signedDb (deviceResponse[s]) + ")",
                         annotationRow (1, true), juce::Justification::right);
     }
 
@@ -559,6 +599,8 @@ private:
     themis::PhaseBands phaseBands {};
     themis::PhaseReport phase;
     bool havePhase = false;
+    bool haveClip = false;
+    themis::ClipTotals clipTotals;
     float fundamentalHz = 0.0f, fundamentalTiltDb = 0.0f; // newest tonal bass; 0 Hz when there is none
     bool noFundamentalHarmonics = false;
     bool overBroadbandStrip = false;
