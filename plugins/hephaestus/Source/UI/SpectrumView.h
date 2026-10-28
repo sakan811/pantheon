@@ -120,9 +120,9 @@ public:
         Range r = drag.range;
 
         if (drag.hit.part == Part::lowEdge)
-            r.lo = std::clamp (hz, (double) FreqAxis::minHz, r.hi / minRangeRatio);
+            r.lo = std::clamp (hz, (double) FreqAxis::minHz, std::max ((double) FreqAxis::minHz, r.hi / minRangeRatio));
         else if (drag.hit.part == Part::highEdge)
-            r.hi = std::clamp (hz, r.lo * minRangeRatio, (double) FreqAxis::maxHz);
+            r.hi = std::clamp (hz, std::min (r.lo * minRangeRatio, (double) FreqAxis::maxHz), (double) FreqAxis::maxHz);
         else
         {
             // Slide both edges by the same number of octaves, stopping at the ends of the axis.
@@ -239,10 +239,56 @@ private:
             g.drawHorizontalLine ((int) yOf (db, plot), plot.getX(), plot.getRight());
     }
 
+    bool showsFill (int band) const
+    {
+        return bandMode (apvts, band) == BandMode::fill && apvts.getRawParameterValue (bandIds (band).amount)->load() > fillOffDb + 0.05f;
+    }
+
+    juce::String tabLabel (int band) const
+    {
+        juce::String label (band + 1);
+        if (showsFill (band))
+            label << "  FILL " << juce::roundToInt (100.0f * engine.bandActivity[band].load (std::memory_order_relaxed)) << "%";
+        return label;
+    }
+
+    // Each band's number tab sits on its lower edge. Tabs that would land on top of each other (bands that
+    // share an edge, or sit close together) go to the first row where they fit, so every one stays readable.
+    std::array<juce::Rectangle<float>, maxBands> layoutTabs (juce::Rectangle<float> plot) const
+    {
+        constexpr float rowHeight = 17.0f;
+        std::array<juce::Rectangle<float>, maxBands> tabs {};
+
+        for (int i = 0; i < maxBands; ++i)
+        {
+            if (! isBandOn (apvts, i))
+                continue;
+
+            const auto extent = bandRange (apvts, i);
+            const float x0 = xOf ((float) extent.lo, plot), x1 = xOf ((float) extent.hi, plot);
+            const float wanted = showsFill (i) ? 72.0f : 20.0f;
+            const float width = std::min (wanted, std::max (20.0f, x1 - x0 - 6.0f));
+
+            for (int row = 0;; ++row)
+            {
+                const auto candidate = juce::Rectangle<float> (x0 + 3.0f, plot.getY() + 3.0f + rowHeight * (float) row, width, 15.0f);
+                const bool clear = std::none_of (tabs.begin(), tabs.begin() + i, [&] (const auto& other)
+                                                 { return other.expanded (2.0f, 1.0f).intersects (candidate); });
+                if (clear || row == maxBands)
+                {
+                    tabs[(size_t) i] = candidate;
+                    break;
+                }
+            }
+        }
+        return tabs;
+    }
+
     void drawBands (juce::Graphics& g, juce::Rectangle<float> plot, bool selectedPass) const
     {
         using namespace colour;
         bool any = false;
+        const auto tabs = layoutTabs (plot);
 
         for (int i = 0; i < maxBands; ++i)
         {
@@ -259,18 +305,14 @@ private:
             const float x0 = xOf ((float) extent.lo, plot), x1 = xOf ((float) extent.hi, plot);
 
             // Behind the traces, so the spectrum stays readable; the selected band is drawn on top as an outline only.
-            if (! selectedPass)
-            {
-                g.setColour (tint.withAlpha (0.05f));
-                g.fillRect (x0, plot.getY(), x1 - x0, plot.getHeight());
-            }
-            else
-            {
-                g.setColour (tint.withAlpha (0.09f));
-                g.fillRect (x0, plot.getY(), x1 - x0, plot.getHeight());
-                if (mode == BandMode::fill)
-                    drawReach (g, plot, extent, tint);
-            }
+            g.setColour (tint.withAlpha (selectedPass ? 0.09f : 0.05f));
+            g.fillRect (x0, plot.getY(), x1 - x0, plot.getHeight());
+
+            const bool fillIsOff = mode == BandMode::fill && apvts.getRawParameterValue (bandIds (i).amount)->load() <= fillOffDb + 0.05f;
+            if (! fillIsOff)
+                drawHarmonics (g, plot, harmonicSpan (mode, extent.lo, extent.hi, sampleRate), tint, isSelected);
+            if (isSelected && mode == BandMode::fill && ! fillIsOff && apvts.getRawParameterValue (bandIds (i).adapt)->load() > 0.5f)
+                drawListening (g, plot, extent, tint);
 
             g.setColour (tint.withAlpha (isSelected ? 0.95f : 0.4f));
             g.drawVerticalLine ((int) x0, plot.getY(), plot.getBottom());
@@ -282,19 +324,12 @@ private:
             }
 
             // Number tab, with what the adaptive fill is doing right now.
-            juce::String label (i + 1);
-            const bool showsFill = mode == BandMode::fill && apvts.getRawParameterValue (bandIds (i).amount)->load() > fillOffDb + 0.05f;
-            if (showsFill)
-                label << "  FILL " << juce::roundToInt (100.0f * engine.bandActivity[i].load (std::memory_order_relaxed)) << "%";
-            // Staggered in three rows so the tabs of neighbouring bands don't sit on top of each other.
-            const float tabW = showsFill ? 72.0f : 20.0f;
-            const auto tab = juce::Rectangle<float> (x0 + 3.0f, plot.getY() + 3.0f + 17.0f * (float) (i % 3),
-                                                     std::min (tabW, std::max (20.0f, x1 - x0 - 6.0f)), 15.0f);
+            const auto tab = tabs[(size_t) i];
             g.setColour (isSelected ? tint : tint.withAlpha (0.45f));
             g.fillRoundedRectangle (tab, 3.0f);
             g.setColour (juce::Colour (0xff120f0d));
             g.setFont (juce::FontOptions (10.0f, juce::Font::bold));
-            g.drawText (label, tab, juce::Justification::centred, false);
+            g.drawText (tabLabel (i), tab, juce::Justification::centred, false);
         }
 
         if (! any && ! selectedPass)
@@ -305,19 +340,52 @@ private:
         }
     }
 
-    // Where a fill band's harmonics land, and where its adaptive fill looks for energy that is already there.
-    void drawReach (juce::Graphics& g, juce::Rectangle<float> plot, Range band, juce::Colour tint) const
+    // Where the harmonics a band adds land (harmonicSpan): a faint zone for every band, bracketed and named for the selected one.
+    void drawHarmonics (juce::Graphics& g, juce::Rectangle<float> plot, Range span, juce::Colour tint, bool isSelected) const
+    {
+        if (span.hi <= span.lo)
+            return;
+
+        const float x0 = xOf ((float) span.lo, plot), x1 = xOf ((float) span.hi, plot);
+        if (x1 - x0 < 2.0f)
+            return;
+
+        g.setColour (tint.withAlpha (isSelected ? 0.07f : 0.035f));
+        g.fillRect (x0, plot.getY(), x1 - x0, plot.getHeight());
+        if (! isSelected)
+            return;
+
+        drawBracket (g, x0, x1, plot.getBottom() - 26.0f, tint.withAlpha (0.75f), "HARMONICS ADDED");
+    }
+
+    // Fill bands only: where the adaptive fill looks for energy that is already there (harmonicReach).
+    void drawListening (juce::Graphics& g, juce::Rectangle<float> plot, Range band, juce::Colour tint) const
     {
         const auto reach = harmonicReach (band.hi);
-        const float x0 = xOf ((float) reach.lo, plot), x1 = xOf ((float) reach.hi, plot), y = plot.getBottom() - 26.0f;
-        g.setColour (tint.withAlpha (0.05f));
-        g.fillRect (x0, plot.getY(), x1 - x0, plot.getHeight());
-        g.setColour (tint.withAlpha (0.6f));
+        drawBracket (g, xOf ((float) reach.lo, plot), xOf ((float) reach.hi, plot), plot.getBottom() - 52.0f,
+                     tint.withAlpha (0.6f), "ADAPT LISTENS HERE");
+    }
+
+    static void drawBracket (juce::Graphics& g, float x0, float x1, float y, juce::Colour line, const juce::String& text)
+    {
+        if (x1 - x0 < 2.0f)
+            return;
+
+        g.setColour (line);
         g.drawHorizontalLine ((int) y, x0, x1);
         g.drawVerticalLine ((int) x0, y - 4.0f, y + 4.0f);
         g.drawVerticalLine ((int) x1, y - 4.0f, y + 4.0f);
-        g.setFont (juce::FontOptions (9.5f, juce::Font::bold));
-        g.drawText ("ENERGY ABOVE THE BAND", (int) x0, (int) y - 15, std::max (40, (int) (x1 - x0)), 12, juce::Justification::centred, false);
+        // A dark pill behind the text keeps it readable over the traces and the band edges.
+        const juce::FontOptions font (9.5f, juce::Font::bold);
+        juce::GlyphArrangement glyphs;
+        glyphs.addLineOfText (juce::Font (font), text, 0.0f, 0.0f);
+        const float textWidth = glyphs.getBoundingBox (0, -1, true).getWidth() + 10.0f;
+        const auto pill = juce::Rectangle<float> (textWidth, 12.0f).withCentre ({ 0.5f * (x0 + x1), y - 10.0f });
+        g.setColour (juce::Colour (0xff120f0d).withAlpha (0.8f));
+        g.fillRoundedRectangle (pill, 3.0f);
+        g.setColour (line);
+        g.setFont (juce::Font (font));
+        g.drawText (text, pill, juce::Justification::centred, false);
     }
 
     void drawAxisLabels (juce::Graphics& g, juce::Rectangle<float> plot) const

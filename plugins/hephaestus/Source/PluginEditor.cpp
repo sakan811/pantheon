@@ -249,10 +249,10 @@ juce::String HephaestusEditor::bandHint() const
         return "Slot " + juce::String (band + 1) + " is free. Add a band here, or double-click the display where you want one.";
 
     if (bandMode (proc.apvts, band) == BandMode::saturate)
-        return "Drives the sound inside the band into the curve, so harmonics appear above it. "
+        return "Drives the sound inside the band into the curve, so harmonics appear above it (the shaded zone, 2nd to 5th harmonic). "
                "Anything outside the band is left exactly as it is.";
 
-    return "Adds harmonics above the band, but only as many as are missing: the energy just above the band is "
+    return "Adds harmonics above the band (the shaded zone, 2nd to 5th harmonic), but only as many as are missing: the energy just above the band is "
            "measured against the band's own, and only the shortfall to AMOUNT is generated. FILL % on the band shows how much is being added.";
 }
 
