@@ -5,7 +5,7 @@ ThemisEditor::ThemisEditor (ThemisProcessor& p)
       proc (p),
       view (p),
       scopeView (p),
-      energyView (p),
+      levelView (p),
       fundamentalView (p),
       targetBox (p.apvts, params::target, params::targetNames()),
       avgBox (p.apvts, params::avgTime, params::avgTimeNames()),
@@ -16,7 +16,7 @@ ThemisEditor::ThemisEditor (ThemisProcessor& p)
 
     addAndMakeVisible (view);
     addAndMakeVisible (scopeView);
-    addAndMakeVisible (energyView);
+    addAndMakeVisible (levelView);
     addAndMakeVisible (fundamentalView);
     for (auto* c : std::initializer_list<juce::Component*> { &targetBox, &avgBox, &deviceBox, &deviceLabel, &learnButton, &saveButton, &loadButton, &resetButton,
                                                               &statusLabel, &toleranceSlider })
@@ -42,8 +42,8 @@ ThemisEditor::ThemisEditor (ThemisProcessor& p)
     setStatus ("Tip: use 'Learn from tracks...' to build a target from your own reference masters.", false);
 
     setResizable (true, true);
-    setResizeLimits (900, 620, 1900, 1200);
-    setSize (1240, 770);
+    setResizeLimits (900, 700, 1900, 1200);
+    setSize (1240, 830);
     startTimerHz (30);
 }
 
@@ -57,7 +57,7 @@ void ThemisEditor::timerCallback()
 {
     view.update();
     scopeView.update();
-    energyView.update();
+    levelView.update();
     fundamentalView.update();
     if (statusTicks > 0 && --statusTicks == 0)
         statusLabel.setText ({}, juce::dontSendNotification);
@@ -183,7 +183,7 @@ void ThemisEditor::resized()
 
     auto history = r.removeFromBottom (kHistoryHeight);
     r.removeFromBottom (8);
-    energyView.setBounds (history.removeFromLeft (history.getWidth() * 3 / 5));
+    levelView.setBounds (history.removeFromLeft (history.getWidth() * 3 / 5));
     history.removeFromLeft (8);
     fundamentalView.setBounds (history);
 

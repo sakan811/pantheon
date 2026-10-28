@@ -1,10 +1,12 @@
 // Headless smoke test for the JUCE layer: runs the real processor + editor without a host or a display.
-//   ThemisSmoke [snapshot.png]
+//   ThemisSmoke [snapshot.png [graphs.png]]
+// The optional second image shows every tab of the two history graphs.
 #include "../plugin/Source/PluginEditor.h"
 #include "../plugin/Source/PluginProcessor.h"
 
 #include <cstdio>
 #include <random>
+#include <set>
 
 static int failures = 0, checks = 0;
 #define CHECK(cond, ...)                                       \
@@ -71,21 +73,25 @@ static void runAudio (ThemisProcessor& proc, double seconds, double fs, int bloc
 }
 
 // A short programme for the screenshot: a four-note bass line (fundamental + two harmonics, centred, with gaps)
-// over pink noise whose right channel is `delaySeconds` late, so the phase check, the mono fold, the fundamental
-// and the energy graph all have something to show.
+// over pink noise whose right channel is `delaySeconds` late and 1 dB quieter, with a loud "chorus" driven into a hard
+// clipper at -1 dBFS, so the phase check, the mono fold, the fundamental, the left/right balance, the clipping check
+// and the level graph all have something to show.
 static void runDemoProgramme (ThemisProcessor& proc, double seconds, double fs, int block, double delaySeconds)
 {
     const size_t total = static_cast<size_t> (seconds * fs), delay = static_cast<size_t> (delaySeconds * fs);
     const auto noise = pinkNoise (total, 9, 0.05f);
     constexpr double notes[] = { 49.0, 55.0, 41.2, 61.7 }, kNoteSeconds = 5.0, kSoundingSeconds = 4.2;
+    constexpr double kChorusStart = 33.0, kChorusEnd = 39.0;
+    constexpr float kChorusGain = 2.6f, kCeiling = 0.891f /* -1 dBFS */, kRightTrim = 0.891f /* -1 dB */;
     std::vector<float> l (total), r (total);
     for (size_t i = 0; i < total; ++i)
     {
         const double t = static_cast<double> (i) / fs, phase = 2.0 * juce::MathConstants<double>::pi * notes[static_cast<size_t> (t / kNoteSeconds) % 4] * t;
         const bool sounding = std::fmod (t, kNoteSeconds) < kSoundingSeconds;
         const float bass = sounding ? static_cast<float> (0.30 * std::sin (phase) + 0.12 * std::sin (2.0 * phase) + 0.05 * std::sin (3.0 * phase)) : 0.0f;
-        l[i] = bass + noise[i];
-        r[i] = bass + noise[i >= delay ? i - delay : 0];
+        const float gain = t >= kChorusStart && t < kChorusEnd ? kChorusGain : 1.0f;
+        l[i] = std::clamp (gain * (bass + noise[i]), -kCeiling, kCeiling);
+        r[i] = std::clamp (gain * kRightTrim * (bass + noise[i >= delay ? i - delay : 0]), -kCeiling, kCeiling);
     }
     // Fed in slices with a pause after each, so the analysis thread keeps up and the history graphs fill like in a host
     // (it skips frames when audio arrives much faster than real time).
@@ -98,6 +104,79 @@ static void runDemoProgramme (ThemisProcessor& proc, double seconds, double fs, 
 }
 
 static void pump (int ms) { juce::MessageManager::getInstance()->runDispatchLoopUntil (ms); }
+
+// Every tab of the two history graphs, stacked: the level graph (BANDS, MID / SIDE looking at the low range, LEFT / RIGHT,
+// PEAKS) on the left and the fundamental graph (BALANCE, LEVELS, PITCH) on the right. Leaves the panels on their first tab.
+static juce::Image renderGraphs (juce::Component& editor)
+{
+    ui::HistoryPanel *level = nullptr, *fundamental = nullptr;
+    for (auto* child : editor.getChildren())
+    {
+        if (auto* p = dynamic_cast<ui::LevelView*> (child))
+            level = p;
+        else if (auto* f = dynamic_cast<ui::FundamentalView*> (child))
+            fundamental = f;
+    }
+    if (level == nullptr || fundamental == nullptr)
+        return {};
+
+    const auto snapshot = [] (ui::HistoryPanel& panel, int tab, int column) {
+        panel.selectTab (tab);
+        panel.selectColumn (column);
+        panel.update();
+        return panel.createComponentSnapshot (panel.getLocalBounds(), true, 1.0f);
+    };
+    constexpr int kGap = 8;
+    const int levelTabs[] = { 0, 1, 2, 3 }, levelColumns[] = { themis::kAllRanges, 0, themis::kAllRanges, themis::kAllRanges };
+    const int fundamentalTabs[] = { 0, 1, 2 };
+    const int h = level->getHeight(), w = level->getWidth() + kGap + fundamental->getWidth();
+    juce::Image out (juce::Image::RGB, w, 4 * h + 3 * kGap, true);
+    juce::Graphics g (out);
+    g.fillAll (colours::background);
+    for (int i = 0; i < 4; ++i)
+        g.drawImageAt (snapshot (*level, levelTabs[i], levelColumns[i]), 0, i * (h + kGap));
+    for (int i = 0; i < 3; ++i)
+        g.drawImageAt (snapshot (*fundamental, fundamentalTabs[i], themis::kAllRanges), level->getWidth() + kGap, i * (h + kGap));
+    snapshot (*level, 0, themis::kAllRanges);
+    snapshot (*fundamental, 0, themis::kAllRanges);
+    return out;
+}
+
+// Clicks along a row of a graph and reports which tabs and range chips answered (the hit areas are laid out by the panel).
+static void clickAlong (ui::HistoryPanel& panel, float y, float fromX, std::set<int>& tabs, std::set<int>& columns)
+{
+    for (float x = fromX; x < static_cast<float> (panel.getWidth()); x += 3.0f)
+    {
+        const juce::Point<float> pos (x, y);
+        const auto now = juce::Time::getCurrentTime();
+        const juce::MouseEvent e (juce::Desktop::getInstance().getMainMouseSource(), pos, juce::ModifierKeys(), 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, &panel, &panel, now, pos, now, 1, false);
+        const int tabBefore = panel.selectedTab(), columnBefore = panel.selectedColumn();
+        panel.mouseDown (e);
+        if (panel.selectedTab() != tabBefore)
+            tabs.insert (panel.selectedTab());
+        if (panel.selectedColumn() != columnBefore)
+            columns.insert (panel.selectedColumn());
+    }
+}
+
+static bool writePng (const juce::Image& img, const char* path)
+{
+    juce::File png (path);
+    png.deleteFile();
+    juce::PNGImageFormat fmt;
+    if (auto out = png.createOutputStream())
+        fmt.writeImageToStream (img, *out);
+    std::printf ("    snapshot -> %s\n", png.getFullPathName().toRawUTF8());
+    return png.existsAsFile();
+}
+
+// The newest `n` frames of the history, oldest first.
+static std::vector<themis::FrameStats> recentFrames (const ThemisProcessor& proc)
+{
+    std::vector<themis::FrameStats> frames (themis::FrameHistory::kCapacity);
+    frames.resize (static_cast<size_t> (proc.frameHistory().copyRecent (frames.data(), themis::FrameHistory::kCapacity)));
+    return frames;
+}
 
 int main (int argc, char** argv)
 {
@@ -221,8 +300,40 @@ int main (int argc, char** argv)
         themis::FrameStats frames[16];
         const int n = proc.frameHistory().copyRecent (frames, 16);
         CHECK (n == 16, "history should hold the analysed frames, got %d", n);
-        CHECK (n > 0 && frames[n - 1].rangeDb[1] > -40.0f && frames[n - 1].rangeDb[1] < 0.0f, "low-mid energy %.1f dB", n > 0 ? frames[n - 1].rangeDb[1] : 0.0f);
+        CHECK (n > 0 && frames[n - 1].energy (themis::Signal::stereo, 1) > -40.0f && frames[n - 1].energy (themis::Signal::stereo, 1) < 0.0f, "low-mid energy %.1f dB", n > 0 ? frames[n - 1].energy (themis::Signal::stereo, 1) : 0.0f);
         proc.resetAnalyzer();
+        runAudio (proc, 0.1, fs, 512, 0.5f, 1);
+        settle();
+    }
+
+    std::printf ("[1e] clipping: clean audio reads clean, a hard clipper is found, reset clears it\n");
+    {
+        proc.resetAnalyzer();
+        runAudio (proc, 0.1, fs, 512, 0.5f, 1);
+        settle();
+        themis::ClipTotals totals;
+        runAudio (proc, 3.0, fs, 512, 0.2f, 1);
+        settle();
+        CHECK (proc.readClip (totals), "the clip meter should have data after audio");
+        std::printf ("    clean pink noise: sample peak %.1f dBFS, true peak %.1f dBTP, %llu clips, %llu overs\n", totals.samplePeakDb, totals.truePeakDb,
+                     static_cast<unsigned long long> (totals.clipEvents), static_cast<unsigned long long> (totals.overSamples));
+        CHECK (totals.clipEvents == 0 && totals.overSamples == 0 && totals.truePeakDb >= totals.samplePeakDb);
+        CHECK (themis::history::clip::level (totals.truePeakDb, totals.clipEvents, totals.overSamples) != themis::Level::bad);
+
+        std::vector<float> hot (static_cast<size_t> (3.0 * fs));
+        for (size_t i = 0; i < hot.size(); ++i)
+            hot[i] = std::clamp (1.6f * static_cast<float> (std::sin (2.0 * juce::MathConstants<double>::pi * 220.0 * static_cast<double> (i) / fs)), -0.95f, 0.95f);
+        runBlocks (proc, hot.data(), hot.data(), hot.size(), 512);
+        settle();
+        CHECK (proc.readClip (totals));
+        std::printf ("    clipped 220 Hz tone: sample peak %.2f dBFS, %llu clips\n", totals.samplePeakDb, static_cast<unsigned long long> (totals.clipEvents));
+        CHECK (totals.clipEvents > 500 && std::abs (totals.samplePeakDb + 0.45f) < 0.05f);
+        CHECK (themis::history::clip::level (totals.truePeakDb, totals.clipEvents, totals.overSamples) == themis::Level::bad);
+        const auto frames = recentFrames (proc);
+        CHECK (std::any_of (frames.begin(), frames.end(), [] (const themis::FrameStats& f) { return f.clipped(); }), "the history should flag the clipped frames");
+
+        proc.resetAnalyzer();
+        CHECK (!proc.readClip (totals), "reset should clear the clip totals");
         runAudio (proc, 0.1, fs, 512, 0.5f, 1);
         settle();
     }
@@ -319,24 +430,52 @@ int main (int argc, char** argv)
         const auto phase = themis::analysePhase (ph);
         CHECK (phase.cause == themis::PhaseCause::delay && std::abs (phase.delayMs - 0.5f) < 0.05f, "demo programme: cause %d, delay %.2f ms",
                static_cast<int> (phase.cause), phase.delayMs);
+        themis::ClipTotals clipTotals;
+        CHECK (proc.readClip (clipTotals));
+        CHECK (clipTotals.clipEvents > 100 && clipTotals.truePeakDb < 0.0f, "demo programme: %llu clips, true peak %.2f dBTP",
+               static_cast<unsigned long long> (clipTotals.clipEvents), clipTotals.truePeakDb);
+        {
+            const auto frames = recentFrames (proc);
+            const auto bass = themis::history::analyseBass (frames.data(), static_cast<int> (frames.size()));
+            const auto peaks = themis::history::analysePeaks (frames.data(), static_cast<int> (frames.size()));
+            const auto width = themis::history::analyseWidth (frames.data(), static_cast<int> (frames.size()), 0);
+            const auto balance = themis::history::analyseBalance (frames.data(), static_cast<int> (frames.size()), themis::kAllRanges);
+            std::printf ("    bass %.0f-%.0f Hz, %d clipped frames, low-end width S-M %.1f dB, left-right %.2f dB\n", bass.lowHz, bass.highHz,
+                         peaks.clippedFrames, width.sideMinusMidDb, balance.leftMinusRightDb);
+            CHECK (bass.have && peaks.have && peaks.clippedFrames > 3 && peaks.clippedFrames < 90 && peaks.level == themis::Level::bad);
+            CHECK (balance.have && std::abs (balance.leftMinusRightDb - 1.0f) < 0.4f);
+        }
         std::unique_ptr<juce::AudioProcessorEditor> editor (proc.createEditor());
         CHECK (editor != nullptr);
         if (editor != nullptr)
         {
-            editor->setSize (1240, 770);
+            editor->setSize (1240, 830);
             pump (400); // let the 30 Hz timer pull data
             auto img = editor->createComponentSnapshot (editor->getLocalBounds(), true, 1.0f);
-            CHECK (img.isValid() && img.getWidth() == 1240 && img.getHeight() == 770);
+            CHECK (img.isValid() && img.getWidth() == 1240 && img.getHeight() == 830);
             if (argc > 1)
-            {
-                juce::File png (argv[1]);
-                png.deleteFile();
-                juce::PNGImageFormat fmt;
-                if (auto out = png.createOutputStream())
-                    fmt.writeImageToStream (img, *out);
-                std::printf ("    snapshot -> %s\n", png.getFullPathName().toRawUTF8());
-            }
-            editor->setSize (900, 620);
+                CHECK (writePng (img, argv[1]));
+            for (auto* child : editor->getChildren())
+                if (auto* panel = dynamic_cast<ui::HistoryPanel*> (child))
+                {
+                    std::set<int> tabs, columns;
+                    panel->selectTab (0);
+                    clickAlong (*panel, 16.0f, 4.0f, tabs, columns); // the title row: the tabs on the left...
+                    CHECK (tabs.count (1) == 1 && tabs.count (2) == 1, "clicking the tabs should select them");
+                    if (dynamic_cast<ui::LevelView*> (panel) != nullptr)
+                    {
+                        panel->selectTab (1); // ...and, on a tab that has them, the range chips on the right
+                        clickAlong (*panel, 16.0f, static_cast<float> (panel->getWidth()) * 0.5f, tabs, columns);
+                        CHECK (columns.size() >= 4, "clicking the range chips should select %d ranges", static_cast<int> (columns.size()));
+                    }
+                    panel->selectTab (0);
+                    panel->selectColumn (themis::kAllRanges);
+                }
+            const auto graphs = renderGraphs (*editor);
+            CHECK (graphs.isValid());
+            if (argc > 2 && graphs.isValid())
+                CHECK (writePng (graphs, argv[2]));
+            editor->setSize (900, 700);
             editor->setSize (1900, 1200);
             pump (100);
         }
