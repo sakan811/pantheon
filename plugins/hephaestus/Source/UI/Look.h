@@ -1,5 +1,6 @@
 #pragma once
 
+#include "../DSP/Band.h"
 #include <juce_gui_basics/juce_gui_basics.h>
 
 namespace hep::ui
@@ -16,6 +17,9 @@ namespace colour
     const juce::Colour dim        { 0xff8c7d6e };
     const juce::Colour trace      { 0xff6d7b8a };
     const juce::Colour track      { 0xff2a221c };
+    const juce::Colour fillMode   { 0xff3fc1c9 }; // harmonic fill bands; saturate bands are ember
+
+    inline juce::Colour forMode (hep::BandMode mode) { return mode == hep::BandMode::fill ? fillMode : ember; }
 }
 
 class ForgeLookAndFeel : public juce::LookAndFeel_V4
@@ -28,6 +32,7 @@ public:
         setColour (juce::Slider::textBoxTextColourId, text);
         setColour (juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
         setColour (juce::Label::textColourId, text);
+        setColour (juce::TextButton::buttonOnColourId, ember);
         setColour (juce::ComboBox::backgroundColourId, panel);
         setColour (juce::ComboBox::outlineColourId, panelEdge);
         setColour (juce::ComboBox::textColourId, text);
@@ -102,12 +107,14 @@ public:
         using namespace colour;
         const auto r = b.getLocalBounds().toFloat().reduced (0.5f);
         const bool on = b.getToggleState();
-        auto fill = on ? ember.withMultipliedBrightness (hover ? 1.1f : 0.95f) : panel.brighter (hover ? 0.15f : 0.05f);
+        // Buttons that carry a mode colour (the band mode switch) light up in it; the rest in ember.
+        const auto lit = b.findColour (juce::TextButton::buttonOnColourId, false);
+        auto fill = on ? lit.withMultipliedBrightness (hover ? 1.1f : 0.95f) : panel.brighter (hover ? 0.15f : 0.05f);
         if (down) fill = fill.darker (0.2f);
 
         g.setColour (fill);
         g.fillRoundedRectangle (r, 5.0f);
-        g.setColour (on ? glow.withAlpha (0.7f) : panelEdge);
+        g.setColour (on ? lit.brighter (0.3f).withAlpha (0.7f) : panelEdge);
         g.drawRoundedRectangle (r, 5.0f, 1.0f);
     }
 

@@ -21,10 +21,13 @@ struct FreqAxis
     static float toHz (float normalised) noexcept { return minHz * std::pow (maxHz / minHz, normalised); }
 };
 
-// Input (grey) vs output (ember) spectrum, plus the crossover points and the bass range being
-// worked on. Analysis and defaults follow FabFilter Pro-Q's analyzer: 8192-point FFT, fast attack,
-// selectable release, a 90 dB range and a 4.5 dB/oct tilt around 1 kHz. Range, speed and tilt are
-// chosen from a right-click menu and saved with the project.
+// Input (grey) vs output (ember) spectrum, with the user's bands drawn over it. Bands are made and
+// edited here: double-click to add one, drag an edge to resize it, drag its body to move it,
+// right-click for its mode and Remove. Saturate bands are ember, harmonic fill bands cyan.
+//
+// Analysis and defaults follow FabFilter Pro-Q's analyzer: 8192-point FFT, fast attack, selectable
+// release, a 90 dB range and a 4.5 dB/oct tilt around 1 kHz. Range, speed and tilt are chosen from
+// the right-click menu on empty space and saved with the project.
 class SpectrumView : public juce::Component, public juce::SettableTooltipClient, private juce::Timer
 {
 public:
@@ -36,8 +39,20 @@ public:
         tilt.load (apvts.state);
         applyAnalyzerSettings();
 
-        setTooltip ("Right-click for analyzer range, speed and tilt.");
+        setTooltip ("Double-click to add a band. Drag a band's edges to resize it, its body to move it. "
+                    "Right-click for the band menu, or on empty space for analyzer range, speed and tilt.");
         startTimerHz (30);
+    }
+
+    int getSelectedBand() const noexcept { return selected; }
+    std::function<void (int)> onSelectionChanged;
+
+    void setSelectedBand (int band)
+    {
+        if (band == selected)
+            return;
+        selected = band;
+        repaint();
     }
 
     void paint (juce::Graphics& g) override
@@ -50,19 +65,91 @@ public:
         g.saveState();
         g.reduceClipRegion (plot.toNearestInt());
         drawGrid (g, plot);
-        drawBassRange (g, plot);
-        drawCrossovers (g, plot);
+        drawBands (g, plot, false);
         drawTrace (g, plot, inTrace, trace.withAlpha (0.55f), trace.withAlpha (0.12f));
         drawTrace (g, plot, outTrace, glow, ember.withAlpha (0.28f));
+        drawBands (g, plot, true);
         g.restoreState();
 
         drawAxisLabels (g, plot);
     }
 
+    void mouseMove (const juce::MouseEvent& e) override
+    {
+        const auto hit = findHit (e.position);
+        setMouseCursor (hit.part == Part::none ? juce::MouseCursor::NormalCursor
+                        : hit.part == Part::body ? juce::MouseCursor::DraggingHandCursor
+                                                 : juce::MouseCursor::LeftRightResizeCursor);
+    }
+
     void mouseDown (const juce::MouseEvent& e) override
     {
+        const auto hit = findHit (e.position);
+        if (hit.part != Part::none)
+            select (hit.band);
+
         if (e.mods.isPopupMenu())
-            showSettingsMenu();
+        {
+            if (hit.part != Part::none) showBandMenu (hit.band);
+            else                        showSettingsMenu (e.position);
+            return;
+        }
+
+        drag = {};
+        if (hit.part == Part::none)
+            return;
+
+        const auto& ids = bandIds (hit.band);
+        drag.hit = hit;
+        drag.range = bandRange (apvts, hit.band);
+        drag.startNormalised = xNormalised (e.position.x);
+        drag.lo = apvts.getParameter (ids.lo);
+        drag.hi = apvts.getParameter (ids.hi);
+        drag.lo->beginChangeGesture();
+        drag.hi->beginChangeGesture();
+        drag.active = true;
+    }
+
+    void mouseDrag (const juce::MouseEvent& e) override
+    {
+        if (! drag.active)
+            return;
+
+        const auto mode = bandMode (apvts, drag.hit.band);
+        const double hz = FreqAxis::toHz (xNormalised (e.position.x));
+        Range r = drag.range;
+
+        if (drag.hit.part == Part::lowEdge)
+            r.lo = std::clamp (hz, (double) FreqAxis::minHz, r.hi / minRangeRatio);
+        else if (drag.hit.part == Part::highEdge)
+            r.hi = std::clamp (hz, r.lo * minRangeRatio, (double) FreqAxis::maxHz);
+        else
+        {
+            // Slide both edges by the same number of octaves, stopping at the ends of the axis.
+            const double octaves = (xNormalised (e.position.x) - drag.startNormalised) * std::log2 ((double) FreqAxis::maxHz / FreqAxis::minHz);
+            const double limited = std::clamp (octaves, std::log2 (FreqAxis::minHz / drag.range.lo),
+                                               std::log2 (FreqAxis::maxHz / drag.range.hi));
+            r = { drag.range.lo * std::pow (2.0, limited), drag.range.hi * std::pow (2.0, limited) };
+        }
+
+        r = effectiveRange (mode, r.lo, r.hi);
+        for (auto [param, value] : { std::pair<juce::RangedAudioParameter*, double> { drag.lo, r.lo }, { drag.hi, r.hi } })
+            param->setValueNotifyingHost (param->convertTo0to1 ((float) value));
+    }
+
+    void mouseUp (const juce::MouseEvent&) override
+    {
+        if (! drag.active)
+            return;
+        drag.lo->endChangeGesture();
+        drag.hi->endChangeGesture();
+        drag.active = false;
+    }
+
+    void mouseDoubleClick (const juce::MouseEvent& e) override
+    {
+        if (findHit (e.position).part == Part::none)
+            showAddMenu (e.position);
     }
 
 private:
@@ -94,6 +181,46 @@ private:
 
     float xOf (float hz, juce::Rectangle<float> r) const { return r.getX() + FreqAxis::toNormalised (hz) * r.getWidth(); }
 
+    float xNormalised (float x) const
+    {
+        const auto r = plotArea();
+        return juce::jlimit (0.0f, 1.0f, (x - r.getX()) / r.getWidth());
+    }
+
+    enum class Part { none, lowEdge, highEdge, body };
+    struct Hit { int band = -1; Part part = Part::none; };
+
+    // Edges win over bodies; among bodies the narrowest wins, so a band inside another stays reachable.
+    Hit findHit (juce::Point<float> at) const
+    {
+        constexpr float grab = 5.0f;
+        const auto plot = plotArea();
+        Hit best;
+        float bestWidth = 1.0e9f, bestEdge = grab + 1.0f;
+
+        for (int i = 0; i < maxBands; ++i)
+        {
+            if (! isBandOn (apvts, i))
+                continue;
+
+            const auto extent = bandRange (apvts, i);
+            const float x0 = xOf ((float) extent.lo, plot), x1 = xOf ((float) extent.hi, plot);
+            for (auto [x, part] : { std::pair<float, Part> { x0, Part::lowEdge }, { x1, Part::highEdge } })
+                if (std::fabs (at.x - x) <= grab && std::fabs (at.x - x) < bestEdge)
+                {
+                    best = { i, part };
+                    bestEdge = std::fabs (at.x - x);
+                }
+
+            if (bestEdge > grab && at.x > x0 && at.x < x1 && x1 - x0 < bestWidth)
+            {
+                best = { i, Part::body };
+                bestWidth = x1 - x0;
+            }
+        }
+        return best;
+    }
+
     float yOf (float db, juce::Rectangle<float> r) const
     {
         const float t = (juce::jlimit (topDb - rangeDb(), topDb, db) - (topDb - rangeDb())) / rangeDb();
@@ -112,31 +239,85 @@ private:
             g.drawHorizontalLine ((int) yOf (db, plot), plot.getX(), plot.getRight());
     }
 
-    void drawBassRange (juce::Graphics& g, juce::Rectangle<float> plot) const
+    void drawBands (juce::Graphics& g, juce::Rectangle<float> plot, bool selectedPass) const
     {
         using namespace colour;
-        const float lo = apvts.getRawParameterValue (id::fundLo)->load();
-        const float hi = (float) effectiveRangeHigh (lo, apvts.getRawParameterValue (id::fundHi)->load());
-        const bool active = ! isOff (apvts.getRawParameterValue (id::extAmount)->load())
-                            || ! isOff (apvts.getRawParameterValue (id::resAmount)->load());
+        bool any = false;
 
-        const auto band = juce::Rectangle<float> (xOf (lo, plot), plot.getY(), xOf (hi, plot) - xOf (lo, plot), plot.getHeight());
-        g.setColour (ember.withAlpha (active ? 0.14f : 0.05f));
-        g.fillRect (band);
-        g.setColour (ember.withAlpha (active ? 0.55f : 0.2f));
-        g.drawVerticalLine ((int) band.getX(), plot.getY(), plot.getBottom());
-        g.drawVerticalLine ((int) band.getRight(), plot.getY(), plot.getBottom());
+        for (int i = 0; i < maxBands; ++i)
+        {
+            if (! isBandOn (apvts, i))
+                continue;
+            any = true;
+            if ((i == selected) != selectedPass)
+                continue;
+
+            const auto mode = bandMode (apvts, i);
+            const auto extent = bandRange (apvts, i);
+            const auto tint = forMode (mode);
+            const bool isSelected = i == selected;
+            const float x0 = xOf ((float) extent.lo, plot), x1 = xOf ((float) extent.hi, plot);
+
+            // Behind the traces, so the spectrum stays readable; the selected band is drawn on top as an outline only.
+            if (! selectedPass)
+            {
+                g.setColour (tint.withAlpha (0.05f));
+                g.fillRect (x0, plot.getY(), x1 - x0, plot.getHeight());
+            }
+            else
+            {
+                g.setColour (tint.withAlpha (0.09f));
+                g.fillRect (x0, plot.getY(), x1 - x0, plot.getHeight());
+                if (mode == BandMode::fill)
+                    drawReach (g, plot, extent, tint);
+            }
+
+            g.setColour (tint.withAlpha (isSelected ? 0.95f : 0.4f));
+            g.drawVerticalLine ((int) x0, plot.getY(), plot.getBottom());
+            g.drawVerticalLine ((int) x1, plot.getY(), plot.getBottom());
+            if (isSelected)
+            {
+                g.drawVerticalLine ((int) x0 + 1, plot.getY(), plot.getBottom());
+                g.drawVerticalLine ((int) x1 - 1, plot.getY(), plot.getBottom());
+            }
+
+            // Number tab, with what the adaptive fill is doing right now.
+            juce::String label (i + 1);
+            const bool showsFill = mode == BandMode::fill && apvts.getRawParameterValue (bandIds (i).amount)->load() > fillOffDb + 0.05f;
+            if (showsFill)
+                label << "  FILL " << juce::roundToInt (100.0f * engine.bandActivity[i].load (std::memory_order_relaxed)) << "%";
+            // Staggered in three rows so the tabs of neighbouring bands don't sit on top of each other.
+            const float tabW = showsFill ? 72.0f : 20.0f;
+            const auto tab = juce::Rectangle<float> (x0 + 3.0f, plot.getY() + 3.0f + 17.0f * (float) (i % 3),
+                                                     std::min (tabW, std::max (20.0f, x1 - x0 - 6.0f)), 15.0f);
+            g.setColour (isSelected ? tint : tint.withAlpha (0.45f));
+            g.fillRoundedRectangle (tab, 3.0f);
+            g.setColour (juce::Colour (0xff120f0d));
+            g.setFont (juce::FontOptions (10.0f, juce::Font::bold));
+            g.drawText (label, tab, juce::Justification::centred, false);
+        }
+
+        if (! any && ! selectedPass)
+        {
+            g.setColour (dim);
+            g.setFont (juce::FontOptions (13.0f));
+            g.drawText ("Double-click to add a band", plot.reduced (0.0f, 40.0f), juce::Justification::centred);
+        }
     }
 
-    void drawCrossovers (juce::Graphics& g, juce::Rectangle<float> plot) const
+    // Where a fill band's harmonics land, and where its adaptive fill looks for energy that is already there.
+    void drawReach (juce::Graphics& g, juce::Rectangle<float> plot, Range band, juce::Colour tint) const
     {
-        g.setColour (colour::copper.withAlpha (0.8f));
-        for (auto pid : { id::xoverLow, id::xoverHigh })
-        {
-            const float x = xOf (apvts.getRawParameterValue (pid)->load(), plot);
-            for (float y = plot.getY(); y < plot.getBottom(); y += 8.0f)
-                g.drawVerticalLine ((int) x, y, y + 3.0f);
-        }
+        const auto reach = harmonicReach (band.hi);
+        const float x0 = xOf ((float) reach.lo, plot), x1 = xOf ((float) reach.hi, plot), y = plot.getBottom() - 26.0f;
+        g.setColour (tint.withAlpha (0.05f));
+        g.fillRect (x0, plot.getY(), x1 - x0, plot.getHeight());
+        g.setColour (tint.withAlpha (0.6f));
+        g.drawHorizontalLine ((int) y, x0, x1);
+        g.drawVerticalLine ((int) x0, y - 4.0f, y + 4.0f);
+        g.drawVerticalLine ((int) x1, y - 4.0f, y + 4.0f);
+        g.setFont (juce::FontOptions (9.5f, juce::Font::bold));
+        g.drawText ("ENERGY ABOVE THE BAND", (int) x0, (int) y - 15, std::max (40, (int) (x1 - x0)), 12, juce::Justification::centred, false);
     }
 
     void drawAxisLabels (juce::Graphics& g, juce::Rectangle<float> plot) const
@@ -190,14 +371,70 @@ private:
         g.strokePath (path, juce::PathStrokeType (1.4f));
     }
 
-    void showSettingsMenu()
+    void select (int band)
+    {
+        if (band == selected)
+            return;
+        selected = band;
+        repaint();
+        if (onSelectionChanged)
+            onSelectionChanged (band);
+    }
+
+    void addBandAt (BandMode mode, float x)
+    {
+        const int slot = addBand (apvts, mode, FreqAxis::toHz (xNormalised (x)));
+        if (slot >= 0)
+            select (slot);
+    }
+
+    void showAddMenu (juce::Point<float> at)
+    {
+        juce::PopupMenu menu;
+        menu.addItem (1, "Add Saturate band here");
+        menu.addItem (2, "Add Harmonic Fill band here");
+        menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (this).withTargetScreenArea (
+                                localAreaToGlobal (juce::Rectangle<int> ((int) at.x, (int) at.y, 1, 1))),
+                            [this, x = at.x] (int result)
+                            {
+                                if (result > 0)
+                                    addBandAt (result == 2 ? BandMode::fill : BandMode::saturate, x);
+                            });
+    }
+
+    void showBandMenu (int band)
+    {
+        juce::PopupMenu menu;
+        const auto mode = bandMode (apvts, band);
+        menu.addItem (1, "Saturate", true, mode == BandMode::saturate);
+        menu.addItem (2, "Harmonic Fill", true, mode == BandMode::fill);
+        menu.addSeparator();
+        menu.addItem (3, "Remove band");
+        menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (this),
+                            [this, band] (int result)
+                            {
+                                if (result == 1 || result == 2)
+                                    setBandMode (apvts, band, result == 2 ? BandMode::fill : BandMode::saturate);
+                                else if (result == 3)
+                                    removeBand (apvts, band);
+                                repaint();
+                            });
+    }
+
+    void showSettingsMenu (juce::Point<float> at)
     {
         juce::PopupMenu menu;
         int nextId = 1;
         std::vector<std::function<void()>> actions;
 
+        menu.addItem (nextId++, "Add Saturate band here");
+        actions.push_back ([this, at] { addBandAt (BandMode::saturate, at.x); });
+        menu.addItem (nextId++, "Add Harmonic Fill band here");
+        actions.push_back ([this, at] { addBandAt (BandMode::fill, at.x); });
+
         for (Setting* setting : { &range, &speed, &tilt })
         {
+            if (setting == &range) menu.addSeparator();
             menu.addSectionHeader (setting->title);
             for (size_t i = 0; i < setting->options.size(); ++i)
             {
@@ -248,5 +485,17 @@ private:
     Setting tilt  { "Tilt",  "spectrumTilt",  { { "0 dB/oct", 0.0f }, { "3 dB/oct", 3.0f }, { "4.5 dB/oct", SpectrumAnalyzer::defaultTilt }, { "6 dB/oct", 6.0f } }, 2 };
 
     SpectrumAnalyzer inTrace, outTrace;
+
+    int selected = 0;
+
+    struct Drag
+    {
+        bool active = false;
+        Hit hit;
+        Range range { 0.0, 0.0 };
+        float startNormalised = 0.0f;
+        juce::RangedAudioParameter* lo = nullptr;
+        juce::RangedAudioParameter* hi = nullptr;
+    } drag;
 };
 }
