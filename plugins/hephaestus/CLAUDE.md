@@ -30,7 +30,7 @@ auval -v aufx Hphs Hpha                             # Apple's AU validator
 
 ```
 Source/DSP/        no GUI dependencies; everything here is covered by Tests/Tests.cpp
-  Band.h             BandMode, maxBands, effectiveRange(), harmonicReach(): where a band really sits
+  Band.h             BandMode, maxBands, effectiveRange(), harmonicReach(), harmonicSpan(): where a band really sits and where its harmonics land
   Biquad.h           double-precision biquads, Butterworth, Bandpass pair
   Waveshaper.h       curves + residual-ADAA shaper
   Saturator.h        user-placed saturate bands: band-pass, per-band oversample + shape, outputs only the distortion
@@ -93,8 +93,9 @@ and `UiCheck` covers it. Never build a `juce::String` on the audio thread: look 
 - parameter ranges, defaults, choice lists, "off" thresholds -> `Parameters.h` (the editor reads combo items from the parameter)
 - per-band parameter ids -> `bandIds()`; adding / removing a band and switching its mode -> `addBand`, `removeBand`, `setBandMode`
   (the spectrum menu, the double-click menu and the band panel buttons all call these)
-- where a band really sits (minimum width, the 2 kHz fill limit) and where its harmonics land -> `effectiveRange()` / `harmonicReach()` in `Band.h`
-  (engine, spectrum view and tests all call them)
+- where a band really sits (minimum width, the 2 kHz fill limit), where its harmonics land (the zone the display shades) and which harmonics
+  fit below Nyquist -> `effectiveRange()` / `harmonicSpan()` / `highestHarmonic()` / `harmonicReach()` (the adaptive measurement region) in `Band.h`
+  (engine, spectrum view and tests all call them; test [5f] pins the span against measured energy)
 - band colours -> `colour::forMode()` in `Look.h`
 - knob id / caption / tooltip / panel membership -> `knobSpecs` and `panelSpecs` (character, master) and `bandKnobSpecs` (the six slots that follow the selected band) in `PluginEditor.cpp`
 - log-frequency axis -> `FreqAxis` in `SpectrumView.h`

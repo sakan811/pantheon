@@ -5,7 +5,7 @@ missing fundamentals for tonal balance. Built with JUCE 8 for FL Studio (VST3/AU
 
 ![Hephaestus editor](docs/screenshot.png)
 
-*An 808-style sub note (52 Hz) with nothing above it, in the "808 Sub Fill" preset. Band 2 (cyan) is a Harmonic Fill band: the grey input trace has no energy above the note, the orange output has grown harmonics at 104 and 156 Hz, and the band's tab reads FILL 85 % because that is how much of its Amount it is currently adding.*
+*An 808-style sub note (52 Hz) with nothing above it, in the "808 Sub Fill" preset. Band 2 (cyan) is a Harmonic Fill band: the grey input trace has no energy above the note, the orange output has grown harmonics at 104 and 156 Hz, and the band's tab reads FILL 85 % because that is how much of its Amount it is currently adding. The tinted zone under "HARMONICS ADDED" is where that band's harmonics land; "ADAPT LISTENS HERE" marks the region the adaptive fill measures.*
 
 You draw **bands** over the spectrum. Each band is one of two things:
 
@@ -13,6 +13,8 @@ You draw **bands** over the spectrum. Each band is one of two things:
 |---|---|
 | **Saturate** (orange) | Drives the sound inside the band into a waveshaper (ADAA + linear-phase oversampling), so harmonics appear above it. Per-band Drive; Curve and Even are shared. Anything outside the band is left exactly as it is. |
 | **Harmonic Fill** (cyan) | Adds harmonics (H2-H5) of the band's content *above* the band, but only as many as are missing. The energy just above the band is measured against the band's own, and only the shortfall to **Amount** is generated, so the balance holds from one moment to the next instead of piling harmonics onto passages that already have them. Optionally **Rebuild** also regenerates a fundamental that is physically missing while its harmonics are present (difference tone, 3f - 2f = f). |
+
+Both kinds show where they add harmonics: the selected band gets a bracketed zone labelled **HARMONICS ADDED**, from the 2nd harmonic of its Low edge to the 5th of its High edge (stopping short of Nyquist, and for a fill band short of any harmonic that would alias); every other band shows it as a faint tint. A fill band with Amount off adds none and shows none.
 
 Up to six bands, any ranges, overlapping or not. Mastering tools: **Delta** (hear only what the plugin adds), **Gain Match** (loudness-matched A/B), **Mid/Side** mode, **Mix** (latency-compensated), and a live **input-vs-output spectrum**. The analyzer follows FabFilter Pro-Q's: an 8192-point FFT, **4.5 dB/oct tilt around 1 kHz** by default, a 90 dB range, fast attack and a selectable release. Right-click empty space in it for Range (60/90/120 dB), Speed and Tilt (0/3/4.5/6 dB/oct); the choice is saved with the project.
 
@@ -97,6 +99,8 @@ Details that matter:
 | Alias energy, 5.3 kHz sine, +18 dB drive (re fundamental) | naive tanh **-18 dB** -> ADAA only **-30 dB** -> with oversampling **-70 to -72 dB** |
 | Even control | bias 0: H2 < -160 dB; bias 0.5: H2 -15 dB |
 | A saturate band acts only on its range | 100 Hz sine, +24 dB drive: 3rd harmonic **-11 dB** with the band on the tone, **-120 dB** with the band at 2-4 kHz |
+| Where the harmonics land (the shaded zone) | band-limited noise through a saturate band at 6 / 12 / 24 dB drive: **0.00 - 0.02 %** of what it adds lies above 5 x High; through a fill band: **0.45 %**, with 81 % of the added energy inside the zone (the rest sits just below it, from intermodulation of a noisy band) |
+| Sample rates 22.05 - 192 kHz | small-signal error **3e-8** (-60 dBFS in, input delayed by the reported latency), loud mixed bands finite and bounded |
 | Harmonic weights vs targets (-6/-9/-15/-22), 45 / 60 / 90 Hz, two input levels | within **0.6 dB** (0.3 dB mid-range), identical at -6 and -26 dBFS |
 | Harmonic tails | 48 dB down 50 ms after note-off, 95 dB down at 100 ms |
 | Tone | the four H2-H5 weights carry unit energy at every tone; dark is H2, bright is led by H3 |
