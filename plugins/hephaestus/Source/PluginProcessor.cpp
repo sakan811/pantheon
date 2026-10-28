@@ -19,7 +19,7 @@ bool HephaestusProcessor::isBusesLayoutSupported (const BusesLayout& layouts) co
 void HephaestusProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 {
     currentSampleRate = sampleRate;
-    engine.prepare (sampleRate, std::max (samplesPerBlock, 64));
+    engine.prepare (sampleRate, std::max (samplesPerBlock, 64), (int) apvts.getRawParameterValue (hep::id::oversampling)->load());
     reportedLatency = -1;
     triggerAsyncUpdate();
 }

@@ -189,7 +189,7 @@ inline EngineParams readParams (juce::AudioProcessorValueTreeState& s)
         harmonicsForTone (vb (ids.tone) * 0.01, f.harmonic);
         f.target = f.extGain * f.extGain;
         f.adapt = vb (ids.adapt) * 0.01;
-        f.ceiling = 10.0 * b.hi;
+        f.ceiling = 10.0 * effectiveRange (BandMode::fill, b.lo, b.hi).hi;
         f.resGain = gainOrOff (vb (ids.rebuild));
         f.fill = 0.8;
     }
