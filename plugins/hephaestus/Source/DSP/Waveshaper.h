@@ -43,7 +43,8 @@ struct AdaaState
 };
 
 // Shapes `data` in place:  out = x + DCblock( ADAA( f(u) - tangent(u) ) / (f'(bias) * drive) ),
-// with u = drive * x + bias.
+// with u = drive * x + bias. With AddInput = false the untouched x is left out and only the
+// distortion it creates is written, for callers that add that to a clean copy of the signal.
 //
 // Splitting off the tangent line at the operating point matters. Plain first-order ADAA is an
 // average of two successive samples in the linear regime, i.e. a gentle low-pass (-5 dB at 15 kHz
@@ -52,7 +53,7 @@ struct AdaaState
 // anti-aliased. The small-signal gain is 1 for every drive and bias, and the DC the asymmetric
 // bias produces is removed from the residual only, so the bass in the clean path is never
 // phase-shifted by the DC blocker.
-template <class Curve>
+template <class Curve, bool AddInput = true>
 inline void shapeBlock (float* data, int n, double driveStart, double driveEnd, double bias,
                         double dcR, AdaaState& st) noexcept
 {
@@ -93,7 +94,7 @@ inline void shapeBlock (float* data, int n, double driveStart, double driveEnd, 
         st.dcX = v;
         st.dcY = y;
 
-        data[i] = (float) (x + y);
+        data[i] = (float) (AddInput ? x + y : y);
     }
 }
 }

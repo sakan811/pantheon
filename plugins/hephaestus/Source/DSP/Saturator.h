@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Band.h"
+#include "Biquad.h"
 #include "Waveshaper.h"
 #include <juce_audio_basics/juce_audio_basics.h>
 #include <juce_dsp/juce_dsp.h>
@@ -8,46 +10,47 @@
 
 namespace hep
 {
-// Three-band harmonic saturator.
+// Multi-band harmonic saturator with user-placed bands.
 //
-//   input -> LR4 split (low | mid | high) -> [oversample -> ADAA waveshaper -> decimate] per band
-//         -> sum
+//   for every active band:  input -> band-pass -> [oversample -> ADAA waveshaper -> decimate]
+//   output = sum of what the shapers ADD (their distortion), not the shaped signal itself
 //
-// The crossovers are 4th-order Linkwitz-Riley (flat magnitude sum, minimum phase, no latency);
-// the low band is run through an all-pass at the upper crossover so the three bands sum flat.
+// The caller adds that sum to a clean, latency-matched copy of the input. This replaces the old
+// fixed LR4 split: bands may overlap, leave gaps or sit anywhere, and the signal outside the
+// shapers is never filtered, so the plugin is exactly transparent at small signal for any
+// arrangement of bands (a split that must sum flat cannot offer that). The distortion of a band is
+// not confined to the band: its harmonics land above it, which is the point.
+//
 // The only latency comes from the linear-phase oversampling filters.
 class Saturator
 {
 public:
-    static constexpr int numBands = 3;
     static constexpr int maxChannels = 2;
     static constexpr int numOsModes = 4; // off, 2x, 4x, 8x
 
+    struct Band
+    {
+        bool active = false;
+        double lo = 100.0, hi = 1000.0;
+        double drive = 1.0; // linear
+    };
+
     struct Params
     {
-        int curve = 0;                      // 0 tanh, 1 atan, 2 algebraic
-        double bias = 0.0;                  // pre-shaper offset; > 0 adds even harmonics
-        double drive[numBands] = { 1, 1, 1 }; // linear
-        double xoverLow = 150.0, xoverHigh = 3500.0;
+        int curve = 0;     // 0 tanh, 1 atan, 2 algebraic
+        double bias = 0.0; // pre-shaper offset; > 0 adds even harmonics
+        std::array<Band, maxBands> band;
     };
 
     void prepare (double sampleRate, int maxBlock)
     {
         fs = sampleRate;
-        juce::dsp::ProcessSpec spec { sampleRate, (juce::uint32) maxBlock, (juce::uint32) maxChannels };
 
-        for (auto* f : { &lowSplit, &highSplit, &lowAllpass })
-            f->prepare (spec);
-
-        lowSplit.setType (juce::dsp::LinkwitzRileyFilterType::lowpass);
-        highSplit.setType (juce::dsp::LinkwitzRileyFilterType::lowpass);
-        lowAllpass.setType (juce::dsp::LinkwitzRileyFilterType::allpass);
-
-        for (auto& b : bandBuf)
-            b.setSize (maxChannels, maxBlock, false, false, true);
+        for (auto& b : scratch)
+            b.setSize (1, maxBlock, false, false, true);
 
         for (int mode = 1; mode < numOsModes; ++mode)
-            for (int b = 0; b < numBands; ++b)
+            for (int b = 0; b < maxBands; ++b)
             {
                 auto os = std::make_unique<juce::dsp::Oversampling<float>> (
                     (size_t) maxChannels, (size_t) mode,
@@ -56,7 +59,6 @@ public:
                 oversampler[(size_t) mode][(size_t) b] = std::move (os);
             }
 
-        cutLow = cutHigh = -1.0;
         reset();
     }
 
@@ -69,72 +71,76 @@ public:
 
     void reset()
     {
-        for (auto* f : { &lowSplit, &highSplit, &lowAllpass })
-            f->reset();
-
+        for (auto& band : state)
+            band = BandState {};
         resetShapers();
-        driveLast = { 1.0, 1.0, 1.0 };
     }
 
-    // In-place over `ch` channel pointers. Result is delayed by latencyFor(osMode).
-    void process (float* const* ch, int nCh, int n, int osMode, const Params& p)
+    // Writes the summed distortion of the active bands to `out` (nCh channels, n samples, delayed
+    // by latencyFor(osMode)). `in` is not modified.
+    void process (const float* const* in, float* const* out, int nCh, int n, int osMode, const Params& p)
     {
-        updateCrossovers (p);
-
-        // Split.
         for (int c = 0; c < nCh; ++c)
-        {
-            auto* low = bandBuf[0].getWritePointer (c);
-            auto* mid = bandBuf[1].getWritePointer (c);
-            auto* high = bandBuf[2].getWritePointer (c);
+            std::fill_n (out[c], n, 0.0f);
 
-            for (int i = 0; i < n; ++i)
+        for (int b = 0; b < maxBands; ++b)
+        {
+            auto& st = state[(size_t) b];
+            const auto& band = p.band[(size_t) b];
+
+            // A band that was switched off and has faded out costs nothing until it comes back.
+            if (! band.active && st.gain <= 0.0f)
             {
-                float lo, rest, m, h;
-                lowSplit.processSample (c, ch[c][i], lo, rest);
-                highSplit.processSample (c, rest, m, h);
-                low[i] = lowAllpass.processSample (c, lo);
-                mid[i] = m;
-                high[i] = h;
+                st.running = false;
+                continue;
             }
-        }
 
-        // Shape every band.
-        for (int b = 0; b < numBands; ++b)
-        {
-            float* bandPtrs[maxChannels] = { bandBuf[(size_t) b].getWritePointer (0),
-                                             bandBuf[(size_t) b].getWritePointer (nCh > 1 ? 1 : 0) };
+            if (! st.running)
+                startBand (b, band);
+            st.running = true;
+
+            updateBandFilters (b, band);
+
+            float* data[maxChannels] = { scratch[0].getWritePointer (0), scratch[1].getWritePointer (0) };
+            for (int c = 0; c < nCh; ++c)
+                for (int i = 0; i < n; ++i)
+                    data[c][i] = (float) st.filter[(size_t) c].process ((double) in[c][i]);
+
             const double dcR = dcCoefficient (osMode);
-            const double dStart = driveLast[(size_t) b], dEnd = p.drive[b];
-            driveLast[(size_t) b] = dEnd;
+            const double dStart = st.drive, dEnd = band.drive;
+            st.drive = dEnd;
 
             if (osMode <= 0)
             {
                 for (int c = 0; c < nCh; ++c)
-                    shape (p.curve, bandPtrs[c], n, dStart, dEnd, p.bias, dcR, adaa[(size_t) b][(size_t) c]);
+                    shape (p.curve, data[c], n, dStart, dEnd, p.bias, dcR, st.adaa[(size_t) c]);
             }
             else
             {
                 auto& os = *oversampler[(size_t) osMode][(size_t) b];
-                juce::dsp::AudioBlock<float> block (bandPtrs, (size_t) nCh, (size_t) n);
+                juce::dsp::AudioBlock<float> block (data, (size_t) nCh, (size_t) n);
                 auto up = os.processSamplesUp (block);
 
                 for (int c = 0; c < nCh; ++c)
                     shape (p.curve, up.getChannelPointer ((size_t) c), (int) up.getNumSamples(),
-                           dStart, dEnd, p.bias, dcR, adaa[(size_t) b][(size_t) c]);
+                           dStart, dEnd, p.bias, dcR, st.adaa[(size_t) c]);
 
                 os.processSamplesDown (block);
             }
-        }
 
-        // Recombine.
-        for (int c = 0; c < nCh; ++c)
-        {
-            const float* low = bandBuf[0].getReadPointer (c);
-            const float* mid = bandBuf[1].getReadPointer (c);
-            const float* high = bandBuf[2].getReadPointer (c);
-            for (int i = 0; i < n; ++i)
-                ch[c][i] = low[i] + mid[i] + high[i];
+            // Fade a band in or out across the block so switching it never clicks.
+            const float target = band.active ? 1.0f : 0.0f;
+            const float step = (target - st.gain) / (float) n;
+            for (int c = 0; c < nCh; ++c)
+            {
+                float g = st.gain;
+                for (int i = 0; i < n; ++i)
+                {
+                    g += step;
+                    out[c][i] += data[c][i] * g;
+                }
+            }
+            st.gain = target;
         }
     }
 
@@ -142,6 +148,15 @@ public:
     void onOversamplingChanged() { resetShapers(); }
 
 private:
+    struct BandState
+    {
+        std::array<Bandpass, maxChannels> filter;
+        std::array<AdaaState, maxChannels> adaa;
+        double cutLo = -1.0, cutHi = -1.0, drive = 1.0;
+        float gain = 0.0f; // fade level of the band's contribution
+        bool running = false;
+    };
+
     void resetShapers()
     {
         for (auto& modes : oversampler)
@@ -149,9 +164,23 @@ private:
                 if (os != nullptr)
                     os->reset();
 
-        for (auto& band : adaa)
-            for (auto& s : band)
+        for (auto& band : state)
+            for (auto& s : band.adaa)
                 s.reset();
+    }
+
+    // A band coming back after a pause starts from clean history, at its own drive.
+    void startBand (int b, const Band& band)
+    {
+        auto& st = state[(size_t) b];
+        for (auto& f : st.filter) f.reset();
+        for (auto& s : st.adaa) s.reset();
+        st.cutLo = st.cutHi = -1.0;
+        st.drive = band.drive;
+        st.gain = 0.0f;
+        for (auto& modes : oversampler)
+            if (modes[(size_t) b] != nullptr)
+                modes[(size_t) b]->reset();
     }
 
     // 5 Hz DC blocker coefficient at the rate the shaper runs at.
@@ -165,30 +194,31 @@ private:
     {
         switch (curve)
         {
-            case 1:  shapeBlock<AtanCurve>      (data, n, d0, d1, bias, dcR, st); break;
-            case 2:  shapeBlock<AlgebraicCurve> (data, n, d0, d1, bias, dcR, st); break;
-            default: shapeBlock<TanhCurve>      (data, n, d0, d1, bias, dcR, st); break;
+            case 1:  shapeBlock<AtanCurve, false>      (data, n, d0, d1, bias, dcR, st); break;
+            case 2:  shapeBlock<AlgebraicCurve, false> (data, n, d0, d1, bias, dcR, st); break;
+            default: shapeBlock<TanhCurve, false>      (data, n, d0, d1, bias, dcR, st); break;
         }
     }
 
-    void updateCrossovers (const Params& p)
+    void updateBandFilters (int b, const Band& band)
     {
-        // Glide towards the target so moving a crossover knob doesn't zipper.
-        const double lowTarget = std::clamp (p.xoverLow, 20.0, fs * 0.2);
-        const double highTarget = std::clamp (p.xoverHigh, lowTarget * 2.0, fs * 0.45);
-        cutLow  = cutLow  < 0.0 ? lowTarget  : cutLow  + 0.2 * (lowTarget  - cutLow);
-        cutHigh = cutHigh < 0.0 ? highTarget : cutHigh + 0.2 * (highTarget - cutHigh);
+        auto& st = state[(size_t) b];
+        const double ceiling = fs * 0.45;
+        const auto range = effectiveRange (BandMode::saturate, band.lo, band.hi);
+        const double hiGoal = std::min (range.hi, ceiling);
+        const double loGoal = std::min (range.lo, hiGoal / minRangeRatio);
 
-        lowSplit.setCutoffFrequency ((float) cutLow);
-        highSplit.setCutoffFrequency ((float) cutHigh);
-        lowAllpass.setCutoffFrequency ((float) cutHigh);
+        // Glide towards the target so moving a band edge doesn't zipper.
+        st.cutLo = st.cutLo < 0.0 ? loGoal : st.cutLo + 0.25 * (loGoal - st.cutLo);
+        st.cutHi = st.cutHi < 0.0 ? hiGoal : st.cutHi + 0.25 * (hiGoal - st.cutHi);
+
+        for (auto& f : st.filter)
+            f.setup (fs, 4, st.cutLo, 4, st.cutHi);
     }
 
-    double fs = 48000.0, cutLow = -1.0, cutHigh = -1.0;
-    juce::dsp::LinkwitzRileyFilter<float> lowSplit, highSplit, lowAllpass;
-    std::array<juce::AudioBuffer<float>, numBands> bandBuf;
-    std::array<std::array<std::unique_ptr<juce::dsp::Oversampling<float>>, numBands>, numOsModes> oversampler;
-    std::array<std::array<AdaaState, maxChannels>, numBands> adaa;
-    std::array<double, numBands> driveLast { 1.0, 1.0, 1.0 };
+    double fs = 48000.0;
+    std::array<juce::AudioBuffer<float>, maxChannels> scratch; // one channel each, reused by every band
+    std::array<std::array<std::unique_ptr<juce::dsp::Oversampling<float>>, maxBands>, numOsModes> oversampler;
+    std::array<BandState, maxBands> state;
 };
 }

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Band.h"
 #include "Biquad.h"
 #include <algorithm>
 #include <array>
@@ -7,10 +8,28 @@
 
 namespace hep
 {
-// The upper edge of the bass range is never allowed closer than this ratio to the lower edge.
-// Shared by the engine, the parameter reader and the editor so they cannot disagree.
-constexpr double minRangeRatio = 1.5;
-inline double effectiveRangeHigh (double lo, double hi) noexcept { return std::max (hi, lo * minRangeRatio); }
+// Relative levels of H2..H5 for the Tone control, blended in dB between three anchors (dark: H2
+// with a trace of H3; mid: the classic virtual-bass roll-off; bright: H3 leads, H4/H5 present) and
+// normalised so the four weights carry unit total energy. That makes Amount "how much harmonic
+// energy, relative to the band" whatever the tone.
+inline void harmonicsForTone (double tone, double (&w)[4]) noexcept
+{
+    static constexpr double dark[4] = { 0.0, -15.0, -36.0, -48.0 };
+    static constexpr double mid[4] = { 0.0, -3.0, -9.0, -16.0 };
+    static constexpr double bright[4] = { -6.0, 0.0, -3.0, -6.0 };
+
+    const double t = std::clamp (tone, 0.0, 1.0);
+    double energy = 0.0;
+    for (int k = 0; k < 4; ++k)
+    {
+        const double db = t < 0.5 ? dark[k] + (mid[k] - dark[k]) * (t * 2.0)
+                                  : mid[k] + (bright[k] - mid[k]) * ((t - 0.5) * 2.0);
+        w[k] = std::pow (10.0, db / 20.0);
+        energy += w[k] * w[k];
+    }
+    for (auto& v : w)
+        v /= std::sqrt (energy);
+}
 
 // Attack/release peak follower.
 struct EnvelopeFollower
@@ -117,8 +136,15 @@ private:
 //            expand level 2:1), band-limited to the target range, and ducked by the amount
 //            of fundamental that is already there (see GapDetector) so it only fills gaps.
 //
-// Everything runs at the host sample rate: the generated components stay below ~1.5 kHz,
-// so there is nothing to alias and no need to oversample.
+// ADAPT   - closes the loop on EXTEND. The energy of the band itself is compared with the energy
+//           already present just above it (harmonicReach); only the shortfall to the requested
+//           amount is generated, so the harmonic-to-fundamental balance holds from one moment to
+//           the next instead of piling harmonics onto passages that already have them. The
+//           measurement is made on the input, so there is no feedback to destabilise.
+//
+// Everything runs at the host sample rate: a fill band's range stops at fillMaxHz, so its
+// harmonics stay clear of Nyquist (the 5th is dropped if it would not) and there is nothing to
+// alias and no need to oversample.
 class FundamentalEngine
 {
 public:
@@ -133,6 +159,8 @@ public:
         double ceiling = 1200.0;             // low-pass applied to the generated harmonics, Hz
         double resGain = 0.0;                // linear; 0 disables the RESTORE path
         double fill = 0.7;                   // 0..1 how strongly an existing fundamental ducks RESTORE
+        double target = 0.0;                 // energy ratio (harmonic reach : band) ADAPT aims to keep
+        double adapt = 0.0;                  // 0 = EXTEND at its fixed level, 1 = generate only the shortfall to `target`
     };
 
     void prepare (double sampleRate)
@@ -148,11 +176,20 @@ public:
             for (auto* b : { &band[c], &ext[c], &restoreIn[c], &restoreOut[c] })
                 b->reset();
 
+        for (auto& r : region)
+            r.reset();
+
         envBand.reset();
         envRestore.reset();
         gaps.reset();
         duck = 1.0;
+        energyBand = energyReach = 0.0;
+        adaptGain = 1.0;
+        curLo = curHi = -1.0; // the next call snaps to the requested range instead of gliding there
     }
+
+    // Current level of the adaptive fill (1 = full amount, 0 = the reach above the band is already full).
+    double currentAdaptGain() const noexcept { return adaptGain; }
 
     // in: nCh read pointers; out: nCh write pointers that receive the additive signal.
     void process (const float* const* in, float* const* out, int nCh, int n, const Params& p) noexcept
@@ -171,6 +208,7 @@ public:
                 peak = std::max (peak, std::fabs (b[(size_t) c]));
             }
             const double envelope = std::max (envBand.process (peak), 1.0e-6);
+            trackAdaptiveGain (x, b, nCh, p);
 
             const Frame extended = p.extGain > 0.0 ? extend (b, envelope, nCh, p) : Frame {};
             const Frame restored = p.resGain > 0.0 ? restore (x, b, nCh, p) : Frame {};
@@ -192,11 +230,11 @@ private:
             const double t3 = x * (4.0 * x * x - 3.0);
             const double t4 = 2.0 * x * t3 - t2;
             const double t5 = 2.0 * x * t4 - t3;
-            const double h = envelope * (p.harmonic[0] * t2 + p.harmonic[1] * t3
-                                         + p.harmonic[2] * t4 + p.harmonic[3] * t5);
+            const double h = envelope * (p.harmonic[0] * usable[0] * t2 + p.harmonic[1] * usable[1] * t3
+                                         + p.harmonic[2] * usable[2] * t4 + p.harmonic[3] * usable[3] * t5);
 
             // Removes the DC / sub terms that appear whenever |x| < 1, and band-limits.
-            result[(size_t) c] = ext[(size_t) c].process (h) * p.extGain;
+            result[(size_t) c] = ext[(size_t) c].process (h) * p.extGain * adaptGain;
         }
         return result;
     }
@@ -229,36 +267,77 @@ private:
         return result;
     }
 
+    // Band energy vs. the energy already above it; the shortfall decides how much to generate.
+    void trackAdaptiveGain (const Frame& x, const Frame& b, int nCh, const Params& p) noexcept
+    {
+        double inBand = 0.0, inReach = 0.0;
+        for (int c = 0; c < nCh; ++c)
+        {
+            const double r = region[(size_t) c].process (x[(size_t) c]);
+            inBand += b[(size_t) c] * b[(size_t) c];
+            inReach += r * r;
+        }
+        energyBand += energyCoeff * (inBand / nCh - energyBand);
+        energyReach += energyCoeff * (inReach / nCh - energyReach);
+
+        const double wanted = energyBand * p.target + 1.0e-10;
+        const double shortfall = 1.0 - std::min (1.0, energyReach / wanted);
+        const double goal = 1.0 - p.adapt + p.adapt * std::sqrt (shortfall);
+        adaptGain += adaptCoeff * (goal - adaptGain);
+    }
+
     void updateCoefficients (const Params& p) noexcept
     {
+        // Glide towards the requested range so dragging an edge doesn't zipper.
+        const auto target = effectiveRange (BandMode::fill, p.lo, p.hi);
+        const auto glide = [] (double& current, double goal)
+        {
+            current = current < 0.0 || std::fabs (goal - current) < 1.0e-4 * goal ? goal : current + 0.25 * (goal - current);
+        };
+        glide (curLo, target.lo);
+        glide (curHi, target.hi);
+
+        const double ceilingHz = std::min (p.ceiling, 0.45 * fs);
         const auto same = [] (double a, double b) { return std::fabs (a - b) < 1.0e-9; };
-        if (same (p.lo, lastLo) && same (p.hi, lastHi) && same (p.ceiling, lastCeiling))
+        if (same (curLo, lastLo) && same (curHi, lastHi) && same (ceilingHz, lastCeiling))
             return;
 
-        lastLo = p.lo; lastHi = p.hi; lastCeiling = p.ceiling;
-        const double lo = p.lo, hi = effectiveRangeHigh (p.lo, p.hi);
+        lastLo = curLo; lastHi = curHi; lastCeiling = ceilingHz;
+        const double lo = curLo, hi = curHi;
+        const auto reach = harmonicReach (hi);
 
         for (size_t c = 0; c < (size_t) maxChannels; ++c)
         {
-            band[c].setup (fs, 4, lo, 4, hi);                  // the bass range itself
-            ext[c].setup (fs, 4, lo * 1.4, 2, p.ceiling);      // generated harmonics: above the range, below the ceiling
+            band[c].setup (fs, 4, lo, 4, hi);                  // the band itself
+            ext[c].setup (fs, 4, lo * 1.4, 2, ceilingHz);      // generated harmonics: above the range, below the ceiling
             restoreIn[c].setup (fs, 2, lo * 1.8, 2, hi * 3.6); // where the harmonics of the missing fundamentals live
             restoreOut[c].setup (fs, 4, lo, 4, hi);            // the regenerated fundamental
+            region[c].setup (fs, 2, reach.lo, 2, reach.hi);    // what is already there, above the band
         }
         gaps.setup (fs, lo, hi);
+
+        // A harmonic that would land too close to Nyquist would alias, so it is dropped.
+        for (int k = 0; k < 4; ++k)
+            usable[k] = (k + 2) * hi < 0.48 * fs ? 1.0 : 0.0;
 
         // Release spans several periods of the lowest frequency: shorter and the envelope ripples
         // at the bass period, which amplitude-modulates the generated harmonics.
         const double release = std::clamp (6.0 / lo, 0.04, 0.3);
         envBand.setTimes (fs, 0.0001, release);
         envRestore.setTimes (fs, 0.0005, release);
+
+        // Short-term energy (what "unbalanced over time" is measured against) and a slower gain.
+        energyCoeff = 1.0 - std::exp (-1.0 / (0.1 * fs));
+        adaptCoeff = 1.0 - std::exp (-1.0 / (0.05 * fs));
     }
 
     double fs = 48000.0;
-    double lastLo = -1.0, lastHi = -1.0, lastCeiling = -1.0;
+    double lastLo = -1.0, lastHi = -1.0, lastCeiling = -1.0, curLo = -1.0, curHi = -1.0;
     double duck = 1.0;
+    double energyBand = 0.0, energyReach = 0.0, energyCoeff = 0.0, adaptGain = 1.0, adaptCoeff = 0.0;
+    double usable[4] = { 1.0, 1.0, 1.0, 1.0 };
 
-    std::array<Bandpass, maxChannels> band, ext, restoreIn, restoreOut;
+    std::array<Bandpass, maxChannels> band, ext, restoreIn, restoreOut, region;
     GapDetector<maxChannels> gaps;
     EnvelopeFollower envBand, envRestore;
 };
