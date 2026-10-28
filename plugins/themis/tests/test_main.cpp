@@ -2,9 +2,11 @@
 #include <themis/Compressor.h>
 #include <themis/Engine.h>
 #include <themis/Biquad.h>
+#include <themis/ClipMeter.h>
 #include <themis/EqFit.h>
 #include <themis/FrameHistory.h>
 #include <themis/Fundamental.h>
+#include <themis/HistoryChecks.h>
 #include <themis/Limiter.h>
 #include <themis/LowCrestMeter.h>
 #include <themis/Loudness.h>
@@ -16,6 +18,7 @@
 #include <themis/Translation.h>
 
 #include <chrono>
+#include <functional>
 #include <cstdio>
 #include <random>
 
@@ -1272,7 +1275,7 @@ TEST (frame_history_keeps_the_newest_frames_in_order)
     {
         FrameStats s;
         s.f0Hz = static_cast<float> (i);
-        s.rangeDb[2] = static_cast<float> (-i);
+        s.energy (Signal::stereo, 2) = static_cast<float> (-i);
         h.push (s);
     }
     CHECK (h.sequence() == static_cast<uint64_t> (FrameHistory::kCapacity + 5));
@@ -1280,7 +1283,7 @@ TEST (frame_history_keeps_the_newest_frames_in_order)
     for (int i = 0; i < 8; ++i)
     {
         CHECK_NEAR (out[i].f0Hz, FrameHistory::kCapacity + 5 - 8 + i, 0.0);
-        CHECK_NEAR (out[i].rangeDb[2], -(FrameHistory::kCapacity + 5 - 8 + i), 0.0);
+        CHECK_NEAR (out[i].energy (Signal::stereo, 2), -(FrameHistory::kCapacity + 5 - 8 + i), 0.0);
     }
     std::vector<FrameStats> all (FrameHistory::kCapacity + 50);
     CHECK (h.copyRecent (all.data(), static_cast<int> (all.size())) == FrameHistory::kCapacity);
@@ -1395,10 +1398,10 @@ TEST (analyzer_records_energy_per_range_and_silence)
     const int n = h.copyRecent (frames.data(), FrameHistory::kCapacity);
     CHECK (n > 40);
     const auto& mid = frames[static_cast<size_t> (n / 4)]; // well inside the tone
-    CHECK_NEAR (mid.rangeDb[2], -20.0 - 3.01, 1.0);        // HIGH-MID holds the tone: mean square of a -20 dB sine
-    CHECK (mid.rangeDb[0] < -70.0f && mid.rangeDb[1] < -70.0f && mid.rangeDb[3] < -70.0f);
+    CHECK_NEAR (mid.energy (Signal::stereo, 2), -20.0 - 3.01, 1.0);        // HIGH-MID holds the tone: mean square of a -20 dB sine
+    CHECK (mid.energy (Signal::stereo, 0) < -70.0f && mid.energy (Signal::stereo, 1) < -70.0f && mid.energy (Signal::stereo, 3) < -70.0f);
     CHECK (mid.f0Hz == 0.0f);
-    CHECK_NEAR (frames[static_cast<size_t> (n - 1)].rangeDb[2], kHistoryFloorDb, 1.0e-6); // digital silence
+    CHECK_NEAR (frames[static_cast<size_t> (n - 1)].energy (Signal::stereo, 2), kHistoryFloorDb, 1.0e-6); // digital silence
     // Level independence of the curve does not touch the absolute energy history: a quieter tone reads lower.
     TonalAnalyzer q;
     q.prepare (fs);
@@ -1407,7 +1410,7 @@ TEST (analyzer_records_energy_per_range_and_silence)
     std::vector<FrameStats> qf (FrameHistory::kCapacity);
     const int qn = q.history().copyRecent (qf.data(), FrameHistory::kCapacity);
     CHECK (qn > 10);
-    CHECK_NEAR (qf[static_cast<size_t> (qn - 1)].rangeDb[2], -43.01, 1.0);
+    CHECK_NEAR (qf[static_cast<size_t> (qn - 1)].energy (Signal::stereo, 2), -43.01, 1.0);
 
     a.requestReset();
     a.process (silence.data(), silence.data(), 4096);
@@ -1433,7 +1436,306 @@ TEST (analyzer_tracks_a_bass_fundamental_over_time)
     CHECK_NEAR (late.f0Hz, 70.0, 0.7);
     CHECK_NEAR (early.fundamentalDb, -14.0 - 3.01, 0.5);
     CHECK_NEAR (early.fundamentalDb - early.harmonicsDb, 10.0 * std::log10 (1.0 / (std::pow (10.0, -0.6) + std::pow (10.0, -1.2))), 0.5);
-    CHECK (late.rangeDb[0] > late.rangeDb[3]); // the energy sits in the LOW range
+    CHECK (late.energy (Signal::stereo, 0) > late.energy (Signal::stereo, 3)); // the energy sits in the LOW range
+}
+
+
+// ---- clipping ---------------------------------------------------------------------------------
+static ClipWindow clipOf (const std::vector<float>& l, const std::vector<float>& r, int block = 512)
+{
+    ClipMeter m;
+    m.prepare();
+    ClipWindow total;
+    for (size_t pos = 0; pos < l.size(); pos += static_cast<size_t> (block))
+    {
+        const int n = static_cast<int> (std::min<size_t> (static_cast<size_t> (block), l.size() - pos));
+        m.process (l.data() + pos, r.data() + pos, n);
+        const auto w = m.take();
+        total.samplePeak = std::max (total.samplePeak, w.samplePeak);
+        total.truePeak = std::max (total.truePeak, w.truePeak);
+        total.clipEvents += w.clipEvents;
+        total.clipSamples += w.clipSamples;
+        total.overSamples += w.overSamples;
+    }
+    return total;
+}
+
+TEST (clip_meter_ignores_clean_audio_and_finds_hard_clipping)
+{
+    const double fs = 48000;
+    const auto clean = sine (fs, 997, -3.0, 2.0);
+    const auto w0 = clipOf (clean, clean);
+    CHECK (w0.clipEvents == 0 && w0.overSamples == 0);
+    CHECK_NEAR (linToDb (w0.samplePeak), -3.0, 0.05);
+
+    // The same tone driven 6 dB into a hard clipper at -1 dBFS: flat tops at a ceiling that is not 0 dBFS.
+    const float ceiling = dbToLin (-1.0f);
+    auto hot = sine (fs, 997, 3.0, 2.0);
+    for (auto& x : hot)
+        x = std::clamp (x, -ceiling, ceiling);
+    const auto w1 = clipOf (hot, hot);
+    // 2 s of a 997 Hz tone: 1994 cycles with two flat tops each, in both channels.
+    CHECK (w1.clipEvents > 7500 && w1.clipEvents < 8500);
+    CHECK (w1.clipSamples >= w1.clipEvents * ClipMeter::kMinRun);
+    CHECK (w1.overSamples == 0); // not over 0 dBFS, just clipped
+    CHECK_NEAR (linToDb (w1.samplePeak), -1.0, 0.01);
+
+    // Clipping only one channel is found in that channel.
+    const auto w2 = clipOf (hot, clean);
+    CHECK (w2.clipEvents > 3500 && w2.clipEvents < 4500);
+}
+
+TEST (clip_meter_counts_overs_and_inter_sample_peaks)
+{
+    const double fs = 48000;
+    // fs/4 sine at 45 degrees: every sample is +/-0.7071 but the waveform peaks at 1.0.
+    const auto s = sine (fs, 12000, 0.0, 0.2, kPi / 4.0);
+    const auto w = clipOf (s, s);
+    CHECK_NEAR (linToDb (w.samplePeak), -3.0, 0.05);
+    CHECK (linToDb (w.truePeak) > -0.5f && linToDb (w.truePeak) < 0.5f);
+    CHECK (w.overSamples == 0 && w.clipEvents == 0);
+
+    // A few samples above full scale.
+    auto over = sine (fs, 100, -6.0, 0.1);
+    over[1000] = 1.2f;
+    over[1001] = -1.0f;
+    const auto wo = clipOf (over, over);
+    CHECK (wo.overSamples == 4); // two samples in each channel
+}
+
+TEST (clip_meter_does_not_mistake_a_quantised_bass_sine_for_clipping)
+{
+    // A loud 35 Hz sine stored with 16 bits has several equal samples at each crest, but reaches them smoothly.
+    const double fs = 48000;
+    auto bass = sine (fs, 35, -1.0, 2.0);
+    for (auto& x : bass)
+        x = std::round (x * 32768.0f) / 32768.0f;
+    const auto w = clipOf (bass, bass);
+    CHECK (w.clipEvents == 0);
+}
+
+TEST (clip_meter_finds_a_plateau_that_spans_blocks_and_ignores_quiet_ones)
+{
+    const double fs = 48000;
+    std::vector<float> x (4096, 0.0f);
+    for (size_t i = 0; i < 2000; ++i)
+        x[i] = 0.3f * static_cast<float> (std::sin (0.05 * static_cast<double> (i)));
+    for (size_t i = 2000; i < 2010; ++i) // ten equal samples at 0.9, split by the 2005 block boundary below
+        x[i] = 0.9f;
+    for (size_t i = 3000; i < 3010; ++i) // a plateau, but only at 0.2: silence-level, not clipping
+        x[i] = 0.2f;
+    ClipMeter m;
+    m.prepare();
+    m.process (x.data(), x.data(), 2005);
+    m.process (x.data() + 2005, x.data() + 2005, 4096 - 2005);
+    const auto w = m.take();
+    CHECK (w.clipEvents == 2); // one per channel
+    CHECK (w.clipSamples == 20);
+    (void) fs;
+}
+
+TEST (clip_meter_totals_accumulate_and_reset)
+{
+    const double fs = 48000;
+    auto hot = sine (fs, 997, 3.0, 0.5);
+    for (auto& x : hot)
+        x = std::clamp (x, -0.9f, 0.9f);
+    ClipMeter m;
+    m.prepare();
+    CHECK (!m.totals().have);
+    m.process (hot.data(), hot.data(), static_cast<int> (hot.size()));
+    auto t = m.totals();
+    CHECK (t.have && t.clipEvents > 500 && t.clipSamples > t.clipEvents);
+    CHECK_NEAR (t.samplePeakDb, -0.915, 0.02);
+    CHECK (history::clip::level (t.truePeakDb, t.clipEvents, t.overSamples) == Level::bad);
+    m.take();
+    m.requestReset();
+    CHECK (!m.totals().have); // a pending reset reads as "no data" even before audio arrives
+    m.process (hot.data(), hot.data(), 16);
+    CHECK (m.totals().have && m.totals().clipEvents == 0);
+}
+
+TEST (clip_verdict_follows_the_true_peak_and_any_clip)
+{
+    using history::clip::level;
+    CHECK (level (-3.0f, 0, 0) == Level::good);
+    CHECK (level (-0.5f, 0, 0) == Level::warn);
+    CHECK (level (0.4f, 0, 0) == Level::bad);
+    CHECK (level (-6.0f, 1, 0) == Level::bad);
+    CHECK (level (-6.0f, 0, 1) == Level::bad);
+}
+
+TEST (analyzer_history_carries_peaks_and_clips)
+{
+    const double fs = 48000;
+    TonalAnalyzer a;
+    a.prepare (fs);
+    const auto quiet = sine (fs, 500, -20.0, 3.0);
+    auto hot = sine (fs, 500, 6.0, 3.0);
+    for (auto& x : hot)
+        x = std::clamp (x, -0.95f, 0.95f);
+    a.process (quiet.data(), quiet.data(), static_cast<int> (quiet.size()));
+    a.process (hot.data(), hot.data(), static_cast<int> (hot.size()));
+    std::vector<FrameStats> frames (FrameHistory::kCapacity);
+    const int n = a.history().copyRecent (frames.data(), FrameHistory::kCapacity);
+    CHECK (n > 60);
+    const auto& early = frames[static_cast<size_t> (n / 4)];
+    const auto& late = frames[static_cast<size_t> (n - 4)];
+    CHECK (!early.clipped() && early.samplePeakDb < -19.0f && early.samplePeakDb > -21.0f);
+    CHECK (late.clipped() && late.clipEvents > 10.0f);
+    CHECK_NEAR (late.samplePeakDb, -0.446, 0.02);
+    CHECK (late.truePeakDb >= late.samplePeakDb);
+    const auto report = history::analysePeaks (frames.data(), n);
+    CHECK (report.have && report.level == Level::bad && report.clippedFrames > 20 && report.clippedFrames < n / 2 + 8);
+    const auto totals = a.clipTotals();
+    CHECK (totals.have && totals.clipEvents > 0);
+    a.requestReset();
+    CHECK (!a.clipTotals().have);
+
+    // Offline analysis (learning from files) skips clip detection.
+    TonalAnalyzer offline;
+    offline.prepareOffline (fs);
+    offline.process (hot.data(), hot.data(), static_cast<int> (hot.size()));
+    CHECK (!offline.clipTotals().have);
+}
+
+// ---- mid / side / left / right energy ----------------------------------------------------------
+TEST (analyzer_records_mid_side_left_right_energy)
+{
+    const double fs = 48000;
+    const auto tone = sine (fs, 2000, -20.0, 4.0);
+    const std::vector<float> silence (tone.size(), 0.0f);
+    std::vector<FrameStats> frames (FrameHistory::kCapacity);
+    const auto last = [&] (const std::vector<float>& l, const std::vector<float>& r) {
+        TonalAnalyzer a;
+        a.prepare (fs);
+        a.process (l.data(), r.data(), static_cast<int> (l.size()));
+        const int n = a.history().copyRecent (frames.data(), FrameHistory::kCapacity);
+        return frames[static_cast<size_t> (n - 3)];
+    };
+    constexpr int kHighMid = 2; // 1-6 kHz, where the tone sits
+    const auto centred = last (tone, tone);
+    CHECK_NEAR (centred.energy (Signal::left, kHighMid), -23.01, 0.7);
+    CHECK_NEAR (centred.energy (Signal::right, kHighMid), -23.01, 0.7);
+    CHECK_NEAR (centred.energy (Signal::mid, kHighMid), -23.01, 0.7);
+    CHECK (centred.energy (Signal::side, kHighMid) < -60.0f);
+    CHECK_NEAR (centred.energy (Signal::stereo, kHighMid), -23.01, 0.7);
+    CHECK_NEAR (centred.energy (Signal::left, kAllRanges), centred.energy (Signal::left, kHighMid), 0.3); // all of it is in that range
+
+    const auto leftOnly = last (tone, silence);
+    CHECK_NEAR (leftOnly.energy (Signal::left, kHighMid), -23.01, 0.7);
+    CHECK (leftOnly.energy (Signal::right, kHighMid) < -60.0f);
+    CHECK_NEAR (leftOnly.energy (Signal::mid, kHighMid), -23.01 - 6.02, 0.7);
+    CHECK_NEAR (leftOnly.energy (Signal::side, kHighMid), -23.01 - 6.02, 0.7);
+    CHECK_NEAR (leftOnly.energy (Signal::stereo, kHighMid), -23.01 - 3.01, 0.7); // mean power of the two channels
+
+    std::vector<float> inverted (tone.size());
+    for (size_t i = 0; i < tone.size(); ++i)
+        inverted[i] = -tone[i];
+    const auto outOfPhase = last (tone, inverted);
+    CHECK (outOfPhase.energy (Signal::mid, kHighMid) < -60.0f);
+    CHECK_NEAR (outOfPhase.energy (Signal::side, kHighMid), -23.01, 0.7);
+    CHECK_NEAR (outOfPhase.energy (Signal::left, kHighMid), -23.01, 0.7);
+}
+
+// ---- verdicts on the history ---------------------------------------------------------------------
+static std::vector<FrameStats> framesWith (int n, const std::function<void (int, FrameStats&)>& fill)
+{
+    std::vector<FrameStats> v (static_cast<size_t> (n));
+    for (int i = 0; i < n; ++i)
+        fill (i, v[static_cast<size_t> (i)]);
+    return v;
+}
+
+TEST (history_swing_names_the_range_that_moves_most)
+{
+    const auto frames = framesWith (200, [] (int i, FrameStats& f) {
+        for (auto& signal : f.energyDb)
+            signal.fill (-30.0f);
+        f.energy (Signal::stereo, 1) = (i / 20) % 2 == 0 ? -30.0f : -42.0f; // LOW-MID alternates by 12 dB between sections
+        f.energy (Signal::stereo, 0) = -30.0f + 0.5f * static_cast<float> (i % 3);
+    });
+    const auto r = history::analyseSwing (frames.data(), 200);
+    CHECK (r.have && r.widest == 1 && r.steadiest != 1);
+    CHECK_NEAR (r.swingDb, 12.0, 0.1);
+    CHECK (r.level == Level::bad);
+    CHECK (r.steadiestDb < history::kSwingWarnDb);
+    CHECK (!history::analyseSwing (frames.data(), 3).have); // too little to judge
+}
+
+TEST (history_width_uses_the_mono_fold_limits)
+{
+    const auto make = [] (float sideMinusMid) {
+        return framesWith (100, [sideMinusMid] (int, FrameStats& f) {
+            for (auto& signal : f.energyDb)
+                signal.fill (kHistoryFloorDb);
+            for (int c = 0; c < kNumEnergyColumns; ++c)
+            {
+                f.energy (Signal::mid, c) = -20.0f;
+                f.energy (Signal::side, c) = -20.0f + sideMinusMid;
+            }
+        });
+    };
+    const auto narrow = make (-14.0f);
+    const auto r = history::analyseWidth (narrow.data(), 100, 0);
+    CHECK (r.have);
+    CHECK_NEAR (r.sideMinusMidDb, -14.0, 0.01);
+    CHECK_NEAR (r.monoLossDb, 10.0 * std::log10 (1.0 + std::pow (10.0, -1.4)), 0.01); // ~0.17 dB
+    CHECK (r.level == Level::good);
+
+    const auto wide = make (-3.0f); // 1.76 dB of mono loss: fine for a whole programme, too much for the bass
+    CHECK (history::analyseWidth (wide.data(), 100, kAllRanges).level == Level::good);
+    CHECK (history::analyseWidth (wide.data(), 100, 0).level == Level::warn);
+    CHECK (history::analyseWidth (wide.data(), 100, 2).level == Level::good);
+    const auto uncorrelated = make (0.0f); // 3 dB lost
+    CHECK (history::analyseWidth (uncorrelated.data(), 100, kAllRanges).level == Level::warn);
+    CHECK (history::analyseWidth (uncorrelated.data(), 100, 0).level == Level::bad);
+
+    const auto silent = framesWith (100, [] (int, FrameStats& f) {
+        for (auto& signal : f.energyDb)
+            signal.fill (kHistoryFloorDb);
+    });
+    CHECK (!history::analyseWidth (silent.data(), 100, 0).have);
+}
+
+TEST (history_balance_reports_the_louder_channel)
+{
+    const auto frames = framesWith (100, [] (int, FrameStats& f) {
+        for (auto& signal : f.energyDb)
+            signal.fill (-25.0f);
+        f.energy (Signal::left, kAllRanges) = -24.0f;
+    });
+    const auto r = history::analyseBalance (frames.data(), 100, kAllRanges);
+    CHECK (r.have);
+    CHECK_NEAR (r.leftMinusRightDb, 1.0, 0.01);
+    CHECK (r.level == Level::warn);
+    CHECK (history::analyseBalance (frames.data(), 100, 0).level == Level::good); // the LOW column is balanced
+}
+
+TEST (history_bass_report_counts_balance_and_sub_floor_time)
+{
+    const auto frames = framesWith (100, [] (int i, FrameStats& f) {
+        if (i % 10 == 9) // no tonal bass in one frame out of ten
+            return;
+        const bool low = i < 40;
+        f.f0Hz = low ? 36.0f : 55.0f;
+        f.fundamentalDb = -20.0f;
+        f.harmonicsDb = low ? -40.0f : -22.0f; // 20 dB above the harmonics (sub-heavy) at first, then 2 dB (balanced)
+    });
+    const auto r = history::analyseBass (frames.data(), 100);
+    CHECK (r.have && r.tracked == 90);
+    CHECK_NEAR (r.lowHz, 36.0, 0.01);
+    CHECK_NEAR (r.highHz, 55.0, 0.01);
+    CHECK_NEAR (r.medianHz, 55.0, 0.01);
+    CHECK_NEAR (r.belowFloorShare, 36.0 / 90.0, 0.01);
+    CHECK (r.dominant == fundamental::Balance::balanced);
+    CHECK_NEAR (r.share[static_cast<size_t> (fundamental::Balance::subHeavy)], 36.0 / 90.0, 0.01);
+    CHECK (r.floorLevel == Level::warn && r.balanceLevel == Level::good);
+
+    CHECK_NEAR (fundamental::tiltDb ([] { FrameStats f; f.f0Hz = 50; f.fundamentalDb = -20; return f; }()), fundamental::kMaxTiltDb, 0.0); // no harmonics
+    CHECK (fundamental::tiltDb (FrameStats {}) <= kHistoryFloorDb);
+    std::vector<FrameStats> none (50);
+    CHECK (!history::analyseBass (none.data(), 50).have);
 }
 
 int main()

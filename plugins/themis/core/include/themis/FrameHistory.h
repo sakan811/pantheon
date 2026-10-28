@@ -8,36 +8,58 @@
 namespace themis
 {
 inline constexpr int kNumEnergyRanges = 4;
+inline constexpr int kAllRanges = kNumEnergyRanges; // the column after the ranges: the whole spectrum
+inline constexpr int kNumEnergyColumns = kNumEnergyRanges + 1;
+
+// The ways the stereo signal is looked at in the energy history, with M = (L + R) / 2 and S = (L - R) / 2 as everywhere
+// else (L = M + S, R = M - S). A full-scale sine in both channels reads -3 dB in left, right and mid and nothing in
+// side; in the left channel only it reads -3 dB in left and -9 dB in mid and side.
+enum class Signal { stereo, mid, side, left, right };
+inline constexpr int kNumSignals = 5;
 
 // Level that stands for "no signal" in the history (digital silence, or no fundamental found).
 inline constexpr float kHistoryFloorDb = -120.0f;
 inline bool hasLevel (float db) { return db > kHistoryFloorDb + 1.0f; }
 
 // What one analysed frame contributes to the time graphs. Levels are mean-square levels in dBFS (a full-scale sine
-// reads -3 dB).
+// reads -3 dB), except the peaks, which are dBFS peak values.
 struct FrameStats
 {
-    std::array<float, kNumEnergyRanges> rangeDb {}; // stereo energy (mid + side) in each energy range
-    float f0Hz = 0.0f;                              // tracked bass fundamental, 0 when none was found
+    // Energy of each signal in each energy range and in the whole spectrum (the last column). "stereo" is mid + side,
+    // i.e. the mean power of the two channels.
+    std::array<std::array<float, kNumEnergyColumns>, kNumSignals> energyDb {};
+    float f0Hz = 0.0f; // tracked bass fundamental, 0 when none was found
     float fundamentalDb = kHistoryFloorDb;
     float harmonicsDb = kHistoryFloorDb; // summed energy of the fundamental's harmonics
+    float samplePeakDb = kHistoryFloorDb, truePeakDb = kHistoryFloorDb; // highest peaks of the audio since the previous frame
+    float clipEvents = 0.0f, clipSamples = 0.0f, overSamples = 0.0f;    // counts since the previous frame (see ClipMeter)
+
+    float& energy (Signal s, int column) { return energyDb[static_cast<size_t> (s)][static_cast<size_t> (column)]; }
+    float energy (Signal s, int column) const { return energyDb[static_cast<size_t> (s)][static_cast<size_t> (column)]; }
 
     bool hasFundamental() const { return f0Hz > 0.0f; }
     // The fundamental's levels, or the floor when none was found (what a graph of them should plot).
     float fundamentalLevelDb() const { return hasFundamental() ? fundamentalDb : kHistoryFloorDb; }
     float harmonicsLevelDb() const { return hasFundamental() ? harmonicsDb : kHistoryFloorDb; }
+    bool clipped() const { return clipEvents > 0.0f || overSamples > 0.0f; }
 
-    static constexpr size_t kFields = kNumEnergyRanges + 3;
+    static constexpr size_t kFields = kNumSignals * kNumEnergyColumns + 8;
 
     // Calls f(value) for every field in storage order; the one place that lists them (push and copy both use it).
     template <typename Self, typename F> // Self: FrameStats or const FrameStats
     static void forEachField (Self& s, F&& f)
     {
-        for (auto& v : s.rangeDb)
-            f (v);
+        for (auto& signal : s.energyDb)
+            for (auto& v : signal)
+                f (v);
         f (s.f0Hz);
         f (s.fundamentalDb);
         f (s.harmonicsDb);
+        f (s.samplePeakDb);
+        f (s.truePeakDb);
+        f (s.clipEvents);
+        f (s.clipSamples);
+        f (s.overSamples);
     }
 };
 

@@ -36,6 +36,16 @@ inline Balance balanceOf (float fundamentalMinusHarmonicsDb)
            : fundamentalMinusHarmonicsDb <= kHarmonicRichDb ? Balance::harmonicRich
                                                             : Balance::balanced;
 }
+
+inline constexpr float kMaxTiltDb = 24.0f; // the balance graph's range; a fundamental with no harmonics at all sits at the top
+
+// How far a frame's fundamental sits above its harmonics, in +/-kMaxTiltDb; kHistoryFloorDb when no fundamental was found.
+inline float tiltDb (const FrameStats& f)
+{
+    if (!f.hasFundamental())
+        return kHistoryFloorDb;
+    return hasLevel (f.harmonicsDb) ? std::clamp (f.fundamentalDb - f.harmonicsDb, -kMaxTiltDb, kMaxTiltDb) : kMaxTiltDb;
+}
 } // namespace fundamental
 
 struct FundamentalEstimate

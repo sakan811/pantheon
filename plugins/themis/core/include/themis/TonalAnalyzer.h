@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ClipMeter.h"
 #include "Common.h"
 #include "FFT.h"
 #include "FrameHistory.h"
@@ -58,6 +59,9 @@ inline constexpr EnergyRange kEnergyRanges[kNumEnergyRanges] = { { "LOW", BandGr
                                                                  { "LOW-MID", 120.0, 1000.0 },
                                                                  { "HIGH-MID", 1000.0, 6000.0 },
                                                                  { "HIGH", 6000.0, BandGrid::kMaxHz } };
+
+// Name of an energy-history column: one of the ranges, or the whole spectrum.
+inline const char* energyColumnName (int column) { return column == kAllRanges ? "ALL" : kEnergyRanges[column].name; }
 
 // Per-band stereo phase relationship, averaged over time like the tonal curve (see TonalAnalyzer::readPhase).
 struct PhaseBands
@@ -121,8 +125,10 @@ inline void smoothBands (BandArray& v, int radius)
 // correlation, the coherence (how stable the inter-channel phase is, which tells a fixed delay or polarity flip
 // from plain stereo width) and the phase itself; see PhaseCancellation.h for what is made of them.
 //
-// History: every non-silent frame also records the absolute stereo energy in each EnergyRange and the level of the
-// bass fundamental against its harmonics (Fundamental.h) into a FrameHistory, for the time graphs.
+// History: every frame also records the absolute energy of the stereo, mid, side, left and right signals in each
+// EnergyRange (and in the whole spectrum), the level of the bass fundamental against its harmonics (Fundamental.h)
+// and the peaks and clipping the audio had since the previous frame (ClipMeter.h) into a FrameHistory, for the time
+// graphs. Digital-silence frames record the floor.
 class TonalAnalyzer
 {
 public:
@@ -164,28 +170,38 @@ public:
         for (auto* v : { &sidePower, &midRe, &midIm, &sideRe, &sideIm, &crossRe, &crossIm })
             v->assign (bins, 0.0f);
         history_.setFramePeriod (static_cast<double> (hop) / fs);
+        clip_.prepare();
+        clipEnabled = true;
         writeCount.store (0, std::memory_order_relaxed);
         buildBandMap();
         setAveragingSeconds (kDefaultAveragingSeconds);
         reset();
     }
 
-    // prepare() for a whole-track average (cumulative mean, no smoothing window).
+    // prepare() for a whole-track average (cumulative mean, no smoothing window). Clip detection is left out: it
+    // would oversample every sample of the track for readouts nobody looks at.
     void prepareOffline (double sampleRate)
     {
         prepare (sampleRate);
         setAveragingSeconds (0.0f);
+        clipEnabled = false;
     }
 
     // 0 = infinite (cumulative mean).
     void setAveragingSeconds (float s) { avgSeconds.store (s, std::memory_order_relaxed); }
 
     // Safe from any thread; applied on the next pump().
-    void requestReset() { resetFlag.store (true, std::memory_order_release); }
+    void requestReset()
+    {
+        clip_.requestReset(); // its detector state belongs to the audio thread, which applies the reset in push()
+        resetFlag.store (true, std::memory_order_release);
+    }
 
     // Audio thread: queue n samples for analysis. Wait-free, no allocation, no FFT.
     void push (const float* l, const float* r, int n)
     {
+        if (clipEnabled)
+            clip_.process (l, r, n);
         const uint64_t w = writeCount.load (std::memory_order_relaxed);
         const uint64_t mask = ringSize - 1;
         for (int i = 0; i < n; ++i)
@@ -256,20 +272,23 @@ public:
         load (published.level, out.levelDb);
     }
 
-    // Absolute energy and fundamental history, one entry per analysed frame (cleared by a reset).
+    // Absolute energy, fundamental and clipping history, one entry per analysed frame (cleared by a reset).
     const FrameHistory& history() const { return history_; }
+
+    // Peaks and clipping of everything pushed since the last reset.
+    ClipTotals clipTotals() const { return clip_.totals(); }
 
     // Analyse an entire buffer offline (reference-track learning). Returns false if too short/quiet.
     static bool analyseOffline (const float* l, const float* r, size_t numSamples, double sampleRate, BandArray& out)
     {
-        TonalAnalyzer a;
-        a.prepareOffline (sampleRate);
+        const auto a = std::make_unique<TonalAnalyzer>(); // the history ring makes it too big for a worker thread's stack
+        a->prepareOffline (sampleRate);
         constexpr int chunk = 4096;
         for (size_t pos = 0; pos < numSamples; pos += chunk)
-            a.process (l + pos, r + pos, static_cast<int> (std::min<size_t> (chunk, numSamples - pos)));
-        if (!a.hasData())
+            a->process (l + pos, r + pos, static_cast<int> (std::min<size_t> (chunk, numSamples - pos)));
+        if (!a->hasData())
             return false;
-        a.readNormalisedDb (out);
+        a->readNormalisedDb (out);
         return true;
     }
 
@@ -345,25 +364,46 @@ private:
         return total;
     }
 
-    static FrameStats silentFrame()
+    // A frame with no signal, carrying the peaks and clips that came with its audio.
+    static FrameStats silentFrame (const ClipWindow& clip)
     {
         FrameStats s;
-        s.rangeDb.fill (kHistoryFloorDb);
+        for (auto& signal : s.energyDb)
+            signal.fill (kHistoryFloorDb);
+        s.samplePeakDb = peakToDb (clip.samplePeak);
+        s.truePeakDb = peakToDb (clip.truePeak);
+        s.clipEvents = static_cast<float> (clip.clipEvents);
+        s.clipSamples = static_cast<float> (clip.clipSamples);
+        s.overSamples = static_cast<float> (clip.overSamples);
         return s;
     }
 
-    // One history entry: the stereo energy (mid + side) per range, and the bass fundamental of the mid signal.
-    FrameStats frameStats (const std::array<double, BandGrid::kNum>& mid, const std::array<double, BandGrid::kNum>& side) const
+    // One history entry: the energy of the stereo, mid, side, left and right signals per range (from the band energies
+    // of mid, side and their cross-spectrum), and the bass fundamental of the mid signal.
+    FrameStats frameStats (const std::array<double, BandGrid::kNum>& mid, const std::array<double, BandGrid::kNum>& side,
+                           const std::array<double, BandGrid::kNum>& cross, const ClipWindow& clip) const
     {
-        FrameStats s = silentFrame();
+        FrameStats s = silentFrame (clip);
         const double toMeanSquare = 2.0 / fftSize; // the bin powers of a frame sum to (fftSize / 2) x its mean square
-        for (size_t r = 0; r < s.rangeDb.size(); ++r)
+        const auto toDb = [&] (double bandPower) { return static_cast<float> (powerToDb (bandPower * toMeanSquare, 1.0e-12)); };
+        for (int column = 0; column < kNumEnergyColumns; ++column)
         {
-            double sum = 0.0;
-            for (int b = 0; b < BandGrid::kNum; ++b)
-                if (bandMap[static_cast<size_t> (b)].valid && kEnergyRanges[r].contains (b))
-                    sum += mid[static_cast<size_t> (b)] + side[static_cast<size_t> (b)];
-            s.rangeDb[r] = static_cast<float> (powerToDb (sum * toMeanSquare, 1.0e-12));
+            double m = 0.0, sd = 0.0, l = 0.0, r = 0.0;
+            for (size_t b = 0; b < mid.size(); ++b)
+            {
+                if (!bandMap[b].valid || (column != kAllRanges && !kEnergyRanges[column].contains (static_cast<int> (b))))
+                    continue;
+                const double both = mid[b] + side[b], x = 2.0 * cross[b]; // |M +/- S|^2 = |M|^2 + |S|^2 +/- 2 Re(M S*)
+                m += mid[b];
+                sd += side[b];
+                l += std::max (both + x, 0.0);
+                r += std::max (both - x, 0.0);
+            }
+            s.energy (Signal::stereo, column) = toDb (m + sd);
+            s.energy (Signal::mid, column) = toDb (m);
+            s.energy (Signal::side, column) = toDb (sd);
+            s.energy (Signal::left, column) = toDb (l);
+            s.energy (Signal::right, column) = toDb (r);
         }
         const auto f = estimateFundamental (power.data(), fftSize / 2 + 1, fs / fftSize, toMeanSquare);
         if (f.found)
@@ -388,10 +428,11 @@ private:
             sideFrame[static_cast<size_t> (i)] = sd * window[static_cast<size_t> (i)];
             energy += static_cast<double> (m) * m + static_cast<double> (sd) * sd; // = (L^2 + R^2) / 2
         }
+        const ClipWindow clip = clipEnabled ? clip_.take() : ClipWindow {};
         const double meanPower = energy / fftSize;
         if (powerToDb (meanPower) < kSilenceDb)
         {
-            history_.push (silentFrame());
+            history_.push (silentFrame (clip));
             return;
         }
 
@@ -411,7 +452,7 @@ private:
         const double totalSide = bandEnergies (sidePower, eSide);
         bandEnergies (crossRe, xRe);
         bandEnergies (crossIm, xIm);
-        history_.push (frameStats (e, eSide));
+        history_.push (frameStats (e, eSide, xRe, clip));
 
         const float tau = avgSeconds.load (std::memory_order_relaxed);
         const double hopSec = static_cast<double> (hop) / fs;
@@ -507,6 +548,7 @@ private:
         foldCrossRe.fill (0.0);
         foldCrossIm.fill (0.0);
         history_.clear();
+        clip_.take(); // drop what was measured before the reset
         frameCount = 0;
         foldCount = 0;
         refFrames = 0;
@@ -532,6 +574,8 @@ private:
     std::array<double, BandGrid::kNum> foldMid {}, foldSide {}; // per-band mid / side power as a share of the frame total
     std::array<double, BandGrid::kNum> foldCrossRe {}, foldCrossIm {}; // per-band Re / Im of M S*, on the same scale
     FrameHistory history_;
+    ClipMeter clip_;
+    bool clipEnabled = true;
     uint64_t ringSize = 0;
     std::atomic<uint64_t> writeCount { 0 }; // total samples pushed since prepare(); the ring index is count & (ringSize-1)
     uint64_t nextFrameEnd = 0;              // worker-side: absolute sample index where the next frame ends
