@@ -94,6 +94,10 @@ int main (int argc, char** argv)
 
     // --- latency reporting follows the oversampling choice --------------------------------------------
     std::printf ("\nLatency reporting\n");
+    // The fuzzing above randomised every parameter, the host wrapper's own Bypass included. Which
+    // value it ends on depends on how many parameters precede it, so clear it before measuring.
+    if (auto* bypass = plugin->getBypassParameter())
+        bypass->setValue (0.0f);
     plugin->setPlayConfigDetails (2, 2, 48000.0, 512);
     plugin->prepareToPlay (48000.0, 512);
     juce::AudioBuffer<float> buffer (2, 512);
@@ -114,9 +118,20 @@ int main (int argc, char** argv)
                 plugin->processBlock (buffer, midi);
                 pump (100); // latency is pushed to the host from the message thread
             }
-            std::printf ("    oversampling='%s' -> reported latency %d samples\n",
-                         os->getCurrentValueAsText().toRawUTF8(), plugin->getLatencySamples());
+            std::printf ("    oversampling='%s' (value %.2f) -> reported latency %d samples\n",
+                         os->getCurrentValueAsText().toRawUTF8(), os->getValue(), plugin->getLatencySamples());
             check ((mode == 0) == (plugin->getLatencySamples() == 0), "latency is 0 only when oversampling is off");
+
+            // What the audio really does: an impulse must come out exactly `latency` samples later.
+            buffer.clear();
+            buffer.setSample (0, 100, 0.5f);
+            buffer.setSample (1, 100, 0.5f);
+            plugin->processBlock (buffer, midi);
+            int peak = 0;
+            for (int i = 0; i < buffer.getNumSamples(); ++i)
+                if (std::fabs (buffer.getSample (0, i)) > std::fabs (buffer.getSample (0, peak))) peak = i;
+            check (peak - 100 == plugin->getLatencySamples(),
+                   "an impulse comes out exactly " + juce::String (plugin->getLatencySamples()) + " samples later (measured " + juce::String (peak - 100) + ")");
         }
 
     // --- state + presets ---------------------------------------------------------------------------------

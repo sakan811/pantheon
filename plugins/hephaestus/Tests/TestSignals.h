@@ -66,4 +66,29 @@ private:
     PinkNoise pink;
     double t = 0;
 };
+
+// A sub-bass note that comes and goes (one second on, one second off) over faint pink noise: the band
+// has energy, and nothing above it. What an adaptive harmonic fill is for.
+class SubBassProgramme
+{
+public:
+    explicit SubBassProgramme (unsigned seed = 5) : pink (seed) {}
+
+    void fill (juce::AudioBuffer<float>& buffer)
+    {
+        for (int i = 0; i < buffer.getNumSamples(); ++i)
+        {
+            const double s = t / fs;
+            const bool on = std::fmod (s, 2.0) < 1.0;
+            const float v = 0.15f * pink.next() + (on ? (float) (0.35 * std::sin (2 * M_PI * 52 * s)) : 0.0f);
+            for (int c = 0; c < buffer.getNumChannels(); ++c)
+                buffer.setSample (c, i, v);
+            t += 1.0;
+        }
+    }
+
+private:
+    PinkNoise pink;
+    double t = 0;
+};
 }

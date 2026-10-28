@@ -1,7 +1,10 @@
-// Renders the plugin editor to a PNG while feeding it programme material that has a missing
-// fundamental (see TestSignals.h), so the spectrum display shows real activity.
+// Renders the plugin editor to a PNG while feeding it programme material (see TestSignals.h), so the
+// spectrum display shows real activity.
 //
-//   HephaestusSnapshot <out.png> [preset name]
+//   HephaestusSnapshot <out.png> [preset name] [missing | sub] [band number to show]
+//
+//   missing  pink noise over a 55 Hz series without its fundamental (default)
+//   sub      a sub-bass note that comes and goes, with nothing above it
 
 #include "PluginEditor.h"
 #include "PluginProcessor.h"
@@ -11,7 +14,7 @@ int main (int argc, char** argv)
 {
     if (argc < 2)
     {
-        std::printf ("usage: HephaestusSnapshot <out.png> [preset name]\n");
+        std::printf ("usage: HephaestusSnapshot <out.png> [preset name] [missing | sub] [band number]\n");
         return 2;
     }
 
@@ -27,14 +30,18 @@ int main (int argc, char** argv)
 
     std::unique_ptr<juce::AudioProcessorEditor> editor (proc.createEditor());
     editor->setVisible (true);
+    if (argc > 4)
+        static_cast<HephaestusEditor&> (*editor).selectBand (juce::String (argv[4]).getIntValue() - 1);
 
-    test::MissingFundamentalProgramme programme;
+    const bool sub = argc > 3 && juce::String (argv[3]) == "sub";
+    test::MissingFundamentalProgramme missing;
+    test::SubBassProgramme subBass;
     juce::AudioBuffer<float> buffer (2, 512);
     juce::MidiBuffer midi;
 
-    for (int block = 0; block < 200; ++block)
+    for (int block = 0; block < (sub ? 440 : 200); ++block) // 440 blocks = 4.7 s: the sub note is on from 4 s to 5 s
     {
-        programme.fill (buffer);
+        if (sub) subBass.fill (buffer); else missing.fill (buffer);
         proc.processBlock (buffer, midi);
         if (block % 4 == 0)
             juce::MessageManager::getInstance()->runDispatchLoopUntil (3);

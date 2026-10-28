@@ -107,3 +107,19 @@ target_link_libraries(HephaestusSnapshot
     PUBLIC
         juce::juce_recommended_config_flags)
 set_target_properties(HephaestusSnapshot PROPERTIES EXCLUDE_FROM_ALL TRUE OSX_ARCHITECTURES "${CMAKE_HOST_SYSTEM_PROCESSOR}")
+
+# ---------------------------------------------------------------------------------------
+# UI check: drives the spectrum view with synthetic mouse events (band drags, limits, slots).
+#   cmake --build build --target HephaestusUiCheck
+# ---------------------------------------------------------------------------------------
+juce_add_console_app(HephaestusUiCheck PRODUCT_NAME "HephaestusUiCheck")
+target_sources(HephaestusUiCheck PRIVATE Tests/UiCheck.cpp Source/PluginProcessor.cpp Source/PluginEditor.cpp)
+target_include_directories(HephaestusUiCheck PRIVATE Source Tests)
+target_compile_definitions(HephaestusUiCheck PRIVATE JUCE_MODAL_LOOPS_PERMITTED=1 JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0)
+target_link_libraries(HephaestusUiCheck
+    PRIVATE
+        juce::juce_audio_utils
+        juce::juce_dsp
+    PUBLIC
+        juce::juce_recommended_config_flags)
+set_target_properties(HephaestusUiCheck PROPERTIES EXCLUDE_FROM_ALL TRUE OSX_ARCHITECTURES "${CMAKE_HOST_SYSTEM_PROCESSOR}")

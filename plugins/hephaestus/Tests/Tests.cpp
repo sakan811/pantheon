@@ -33,11 +33,33 @@ double amplitudeAt (const std::vector<float>& x, int start, int len, double f)
 // Amplitude over the second half of a one-second signal, where every filter has settled.
 double settledAmplitude (const std::vector<float>& x, double f) { return amplitudeAt (x, 24000, 16000, f); }
 
+BandParams saturateBand (double lo, double hi, double drive)
+{
+    BandParams b;
+    b.on = true;
+    b.mode = BandMode::saturate;
+    b.lo = lo;
+    b.hi = hi;
+    b.drive = drive;
+    return b;
+}
+
+BandParams fillBand (const FundamentalEngine::Params& fill)
+{
+    BandParams b;
+    b.on = true;
+    b.mode = BandMode::fill;
+    b.lo = fill.lo;
+    b.hi = fill.hi;
+    b.fill = fill;
+    return b;
+}
+
+// One full-range saturate band at 0 dB drive: the plugin's "nothing to hear" baseline.
 EngineParams cleanParams()
 {
     EngineParams e;
-    e.sat.drive[0] = e.sat.drive[1] = e.sat.drive[2] = 1.0;
-    e.sat.bias = 0.0;
+    e.bands[0] = saturateBand (20.0, 20000.0, 1.0);
     e.osMode = 2;
     return e;
 }
@@ -103,6 +125,18 @@ void testTransparency()
         }
         check (worst < 0.2, fmt ("os=%s (latency %d) worst %.3f dB |", names[os], rig.eng.getLatency(), worst) + line);
     }
+
+    // Bands overlap and leave gaps freely; the clean signal never goes through them.
+    Rig many;
+    many.p.bands = { saturateBand (60, 300, 8.0), saturateBand (200, 5000, 8.0), saturateBand (3000, 12000, 8.0),
+                     saturateBand (100, 400, 8.0), saturateBand (20, 20000, 8.0), saturateBand (500, 700, 8.0) };
+    double worst = 0;
+    for (double f : { 40.0, 150.0, 1000.0, 3500.0, 8000.0, 15000.0 })
+    {
+        const auto in = sines ({ { f, 0.001 } }, 48000);
+        worst = std::max (worst, std::fabs (db (settledAmplitude (many.runMono (in), f) / settledAmplitude (in, f))));
+    }
+    check (worst < 0.2, fmt ("six overlapping bands at 18 dB drive: worst %.3f dB", worst));
 }
 
 void testLatencyAlignment()
@@ -169,7 +203,7 @@ void testAliasing()
     for (int os = 0; os < 4; ++os)
     {
         Rig rig (os);
-        rig.p.sat.drive[0] = rig.p.sat.drive[1] = rig.p.sat.drive[2] = 8.0; // +18 dB
+        rig.p.bands[0].drive = 8.0; // +18 dB
         levels[os] = aliasLevel (rig.runMono (in));
         std::printf ("  Hephaestus os=%d                       : %7.1f dB\n", os, levels[os]);
     }
@@ -181,14 +215,14 @@ void testAliasing()
 
 void testEvenOdd()
 {
-    std::printf ("\n[4] Even/odd control: 1 kHz sine, tanh, +12 dB drive on the mid band\n");
+    std::printf ("\n[4] Even/odd control: 1 kHz sine, tanh, +12 dB drive on a 300 Hz - 4 kHz band\n");
     const auto in = sines ({ { 1000.0, 0.3 } }, 48000);
 
     for (double bias : { 0.0, 0.5 })
     {
         Rig rig;
-        rig.p.sat.drive[1] = 4.0;
-        rig.p.sat.bias = bias;
+        rig.p.bands[0] = saturateBand (300.0, 4000.0, 4.0);
+        rig.p.bias = bias;
         const auto out = rig.runMono (in);
         const double a1 = settledAmplitude (out, 1000);
         const double h2 = db (settledAmplitude (out, 2000) / a1), h3 = db (settledAmplitude (out, 3000) / a1);
@@ -225,7 +259,7 @@ std::vector<float> runFund (const std::vector<float>& in, const FundamentalEngin
 // Magnitude of the engine's 4th-order Butterworth bass-range filter at f.
 double rangeGain (double f, const FundamentalEngine::Params& p)
 {
-    const double hi = effectiveRangeHigh (p.lo, p.hi);
+    const double hi = effectiveRange (BandMode::fill, p.lo, p.hi).hi;
     return 1.0 / std::sqrt (1.0 + std::pow (p.lo / f, 8.0)) / std::sqrt (1.0 + std::pow (f / hi, 8.0));
 }
 
@@ -282,6 +316,153 @@ void testExtendNoteOff()
     }
 }
 
+void testBandsActOnTheirRange()
+{
+    std::printf("\n[4b] Saturate bands act on their own range: 100 Hz sine, +24 dB drive\n");
+    const auto in = sines ({ { 100.0, 0.3 } }, 48000);
+
+    double h3[2];
+    int i = 0;
+    for (auto [lo, hi] : { std::pair<double, double> { 50.0, 200.0 }, { 2000.0, 4000.0 } })
+    {
+        Rig rig;
+        rig.p.bands[0] = saturateBand (lo, hi, 16.0);
+        const auto out = rig.runMono (in);
+        h3[i++] = db (settledAmplitude (out, 300) / settledAmplitude (out, 100));
+    }
+    check (h3[0] > -30.0 && h3[1] < -60.0,
+           fmt ("3rd harmonic: %+.1f dB with the band on the tone, %+.1f dB with the band at 2-4 kHz", h3[0], h3[1]));
+}
+
+void testBandSwitching()
+{
+    std::printf ("\n[8b] A band that is switched off fades out and leaves the clean signal exactly\n");
+    const auto in = noise (96000, 5);
+    Rig rig;
+    rig.p.bands[0] = saturateBand (20.0, 20000.0, 8.0);
+    rig.p.bands[1] = fillBand (extendParams());
+
+    const std::vector<float> first (in.begin(), in.begin() + 48000), second (in.begin() + 48000, in.end());
+    const auto outOn = rig.runMono (first);
+    float sat = 0;
+    for (size_t i = 24000; i < 48000; ++i) sat = std::max (sat, std::fabs (outOn[i] - first[i - (size_t) rig.eng.getLatency()]));
+
+    rig.p.bands[0].on = rig.p.bands[1].on = false;
+    const auto outOff = rig.runMono (second);
+    const int latency = rig.eng.getLatency();
+    float residue = 0;
+    for (size_t i = 24000; i < 48000; ++i) residue = std::max (residue, std::fabs (outOff[i] - second[i - (size_t) latency]));
+
+    check (sat > 0.01f && residue < 1.0e-6f,
+           fmt ("bands on change the signal by up to %.3f; once off the output is the delayed input (max error %.1e)", sat, residue));
+}
+
+void testToneWeights()
+{
+    std::printf ("\n[5d] Tone: H2..H5 weights always carry unit energy, dark -> bright\n");
+    bool unit = true;
+    std::string line;
+    for (double tone : { 0.0, 0.25, 0.5, 0.75, 1.0 })
+    {
+        double w[4];
+        harmonicsForTone (tone, w);
+        unit = unit && std::fabs (w[0] * w[0] + w[1] * w[1] + w[2] * w[2] + w[3] * w[3] - 1.0) < 1.0e-9;
+        line += fmt (" %.2f:[%+.1f %+.1f %+.1f %+.1f]", tone, db (w[0]), db (w[1]), db (w[2]), db (w[3]));
+    }
+    double dark[4], bright[4];
+    harmonicsForTone (0.0, dark);
+    harmonicsForTone (1.0, bright);
+    check (unit && dark[0] > 0.95 && bright[1] > bright[0], "sum of squares = 1; dark is H2, bright is led by H3 |" + line + " dB");
+}
+
+void testNyquistGuard()
+{
+    std::printf ("\n[5e] Harmonics that would land too close to Nyquist are dropped (16 kHz host, 1 - 2 kHz band)\n");
+    constexpr double rate = 16000.0; // far below real hosts; the guard exists for ranges a low rate would alias
+    std::vector<float> in (32000);
+    for (size_t i = 0; i < in.size(); ++i)
+        in[i] = (float) (0.5 * std::sin (2.0 * M_PI * 1500.0 * (double) i / rate));
+
+    FundamentalEngine::Params p = extendParams();
+    p.lo = 1000.0;
+    p.hi = 2000.0;
+    p.ceiling = 7000.0;
+    FundamentalEngine fe;
+    fe.prepare (rate);
+    std::vector<float> out (in.size());
+    for (size_t pos = 0; pos < in.size(); pos += 480)
+    {
+        const int n = (int) std::min<size_t> (480, in.size() - pos);
+        const float* inp[1] = { in.data() + pos };
+        float* outp[1] = { out.data() + pos };
+        fe.process (inp, outp, 1, n, p);
+    }
+
+    const auto level = [&] (double f)
+    {
+        double re = 0, im = 0;
+        for (size_t i = 16000; i < 32000; ++i)
+        {
+            re += out[i] * std::cos (2.0 * M_PI * f * (double) i / rate);
+            im += out[i] * std::sin (2.0 * M_PI * f * (double) i / rate);
+        }
+        return db (2.0 * std::sqrt (re * re + im * im) / 16000.0);
+    };
+    const double h2 = level (3000.0), h3 = level (4500.0), h4 = level (6000.0);
+    check (h2 > -20.0 && h3 > -25.0 && h4 < h2 - 40.0,
+           fmt ("H2 %.0f dB and H3 %.0f dB are generated; H4 (6 kHz, from a band reaching 2 kHz) %.0f dB is dropped", h2, h3, h4));
+}
+
+// Energy of the engine's added signal over the settled second half of a two-second run.
+double addedEnergy (const std::vector<float>& in, const FundamentalEngine::Params& p)
+{
+    const auto add = runFund (in, p);
+    double sum = 0;
+    for (size_t i = 48000; i < add.size(); ++i) sum += (double) add[i] * add[i];
+    return sum / (double) (add.size() - 48000);
+}
+
+void testAdaptiveFill()
+{
+    std::printf ("\n[5c] Adaptive fill: 60 Hz band (40-120 Hz), Amount -6 dB; energy already above the band decides how much is added\n");
+    FundamentalEngine::Params p;
+    harmonicsForTone (0.5, p.harmonic);
+    p.extGain = std::pow (10.0, -6.0 / 20.0);
+    p.target = p.extGain * p.extGain;
+
+    // The 60 Hz tone as the band-pass passes it, and the 2nd-order pair that looks for energy above it.
+    const double bandAmp = 0.4 * rangeGain (60.0, p), eBand = bandAmp * bandAmp / 2.0;
+    const auto reach = harmonicReach (effectiveRange (BandMode::fill, p.lo, p.hi).hi);
+    const auto above = [&] (double f, double amp)
+    {
+        const double g = amp / std::sqrt (1.0 + std::pow (reach.lo / f, 4.0)) / std::sqrt (1.0 + std::pow (f / reach.hi, 4.0));
+        return g * g / 2.0;
+    };
+
+    // 200 / 280 Hz are not harmonics of 60 Hz, so they can't be mistaken for generated content.
+    const auto hollow = sines ({ { 60.0, 0.4 } }, 96000);
+    const auto rich = sines ({ { 60.0, 0.4 }, { 200.0, 0.3 }, { 280.0, 0.3 } }, 96000);
+    const auto partial = sines ({ { 60.0, 0.4 }, { 200.0, 0.1 } }, 96000);
+
+    p.adapt = 0.0;
+    const double openHollow = addedEnergy (hollow, p), openRich = addedEnergy (rich, p);
+    p.adapt = 1.0;
+    const double gHollow = addedEnergy (hollow, p), gRich = addedEnergy (rich, p), gPartial = addedEnergy (partial, p);
+
+    check (std::fabs (db (std::sqrt (openHollow / openRich))) < 1.0,
+           fmt ("adapt 0%%: open loop adds the same to a hollow and to a full passage (%+.2f dB apart)",
+                db (std::sqrt (openHollow / openRich))));
+    check (std::fabs (db (std::sqrt (gHollow / eBand)) + 6.0) < 1.5,
+           fmt ("adapt 100%%, nothing above the band: added energy %+.1f dB re band (Amount -6.0)", db (std::sqrt (gHollow / eBand))));
+    check (db (std::sqrt (gRich / gHollow)) < -20.0,
+           fmt ("adapt 100%%, plenty above the band: adds %+.1f dB re the hollow case", db (std::sqrt (gRich / gHollow))));
+
+    const double expected = 1.0 - above (200.0, 0.1) / (eBand * p.target);
+    const double measured = gPartial / gHollow;
+    check (std::fabs (db (std::sqrt (measured / expected))) < 1.5,
+           fmt ("adapt 100%%, a quarter of the target above the band: adds %.2f of the full amount (law says %.2f)", measured, expected));
+}
+
 void testRestore()
 {
     std::printf ("\n[6] Fundamental Restore: 120 + 180 Hz present, 60 Hz missing\n");
@@ -321,7 +502,7 @@ void testBassStaysCentred()
     {
         Rig rig;
         rig.p.midSide = ms == 1;
-        rig.p.fund = extendParams();
+        rig.p.bands[0] = fillBand (extendParams());
         const auto out = rig.run (left, &right).l;
         h2[ms] = db (settledAmplitude (out, 140) / settledAmplitude (out, 70));
     }
@@ -335,9 +516,9 @@ void testMixDeltaMatch()
     const auto in = noise (96000, 11);
     const auto configure = [] (Rig& rig)
     {
-        rig.p.sat.drive[0] = rig.p.sat.drive[1] = rig.p.sat.drive[2] = 4.0;
-        rig.p.sat.bias = 0.3;
-        rig.p.fund = extendParams();
+        rig.p.bands[0].drive = 4.0;
+        rig.p.bias = 0.3;
+        rig.p.bands[1] = fillBand (extendParams());
     };
 
     Rig wetRig, dryRig, deltaRig, halfRig;
@@ -373,7 +554,7 @@ void testMixDeltaMatch()
     for (int match = 0; match < 2; ++match)
     {
         Rig rig;
-        rig.p.sat.drive[0] = rig.p.sat.drive[1] = rig.p.sat.drive[2] = 4.0;
+        rig.p.bands[0].drive = 4.0;
         rig.p.match = match == 1;
         (match ? onDb : offDb) = db (rms (rig.runMono (tone)) / rms (tone));
     }
@@ -401,18 +582,23 @@ void testRobustness()
         p.midSide = u (rng) > 0.5f;
         p.delta = u (rng) > 0.8f;
         p.match = u (rng) > 0.5f;
-        p.satOn = u (rng) > 0.2f;
         p.osMode = (int) (u (rng) * 3.99f);
-        p.sat.curve = (int) (u (rng) * 2.99f);
-        p.sat.bias = 0.8 * u (rng);
-        for (auto& d : p.sat.drive) d = std::pow (10.0, 24.0 * u (rng) / 20.0);
-        p.sat.xoverLow = 60.0 + 440.0 * u (rng);
-        p.sat.xoverHigh = 1500.0 + 10500.0 * u (rng);
-        p.fund = extendParams();
-        p.fund.lo = 25.0 + 95.0 * u (rng);
-        p.fund.hi = p.fund.lo * (1.5 + 3.0 * u (rng));
-        p.fund.resGain = u (rng) > 0.5f ? 1.0 : 0.0;
-        p.fund.extGain = u (rng) > 0.3f ? 2.0 : 0.0;
+        p.curve = (int) (u (rng) * 2.99f);
+        p.bias = 0.8 * u (rng);
+        for (auto& band : p.bands)
+        {
+            band.on = u (rng) > 0.3f;
+            band.mode = u (rng) > 0.5f ? BandMode::fill : BandMode::saturate;
+            band.lo = 20.0 * std::pow (1000.0, (double) u (rng));
+            band.hi = band.lo * (1.0 + 4.0 * u (rng)); // sometimes closer than the minimum ratio
+            band.drive = std::pow (10.0, 24.0 * u (rng) / 20.0);
+            band.fill = extendParams();
+            band.fill.resGain = u (rng) > 0.5f ? 1.0 : 0.0;
+            band.fill.extGain = u (rng) > 0.3f ? 2.0 : 0.0;
+            band.fill.target = band.fill.extGain * band.fill.extGain;
+            band.fill.adapt = u (rng);
+            band.fill.ceiling = 10.0 * band.hi;
+        }
 
         const int block = 1 + (int) (u (rng) * 1500.0f); // includes > maxBlock and tiny sizes
         juce::AudioBuffer<float> buf (u (rng) > 0.15f ? 2 : 1, block);
@@ -434,9 +620,9 @@ void testRobustness()
     // Mid/side on a mono signal: both channels must remain identical.
     Rig ms;
     ms.p.midSide = true;
-    ms.p.sat.drive[0] = ms.p.sat.drive[1] = ms.p.sat.drive[2] = 4.0;
-    ms.p.sat.bias = 0.4;
-    ms.p.fund = extendParams();
+    ms.p.bands[0].drive = 4.0;
+    ms.p.bias = 0.4;
+    ms.p.bands[1] = fillBand (extendParams());
     const auto out = ms.run (sines ({ { 70.0, 0.4 }, { 900.0, 0.2 } }, 24000));
     float maxDiff = 0;
     for (size_t i = 0; i < out.l.size(); ++i) maxDiff = std::max (maxDiff, std::fabs (out.l[i] - out.r[i]));
@@ -486,16 +672,21 @@ void testSpectrumAnalyzer()
 
 void benchmark()
 {
-    std::printf ("\n[11] CPU: 10 s of stereo @ 48 kHz, everything on\n");
+    std::printf ("\n[11] CPU: 10 s of stereo @ 48 kHz, all six bands on (4 saturate, 2 adaptive fill with rebuild)\n");
     const auto in = sines ({ { 55.0, 0.3 }, { 440.0, 0.2 }, { 5000.0, 0.1 } }, 480000);
 
     for (int os = 0; os < 4; ++os)
     {
         Rig rig (os);
-        rig.p.sat.drive[0] = rig.p.sat.drive[1] = rig.p.sat.drive[2] = 3.0;
-        rig.p.sat.bias = 0.3;
-        rig.p.fund = extendParams();
-        rig.p.fund.resGain = 1.0;
+        rig.p.bias = 0.3;
+        rig.p.bands = { saturateBand (20, 150, 3.0), saturateBand (150, 3500, 3.0), saturateBand (3500, 20000, 3.0),
+                        saturateBand (60, 8000, 2.0), fillBand (extendParams()), fillBand (extendParams()) };
+        for (size_t b = 4; b < 6; ++b)
+        {
+            rig.p.bands[b].fill.resGain = 1.0;
+            rig.p.bands[b].fill.adapt = 1.0;
+            rig.p.bands[b].fill.target = 0.25;
+        }
 
         const auto t0 = std::chrono::steady_clock::now();
         rig.run (in, nullptr, 512);
@@ -511,11 +702,16 @@ int main()
     testLatencyAlignment();
     testAliasing();
     testEvenOdd();
+    testBandsActOnTheirRange();
     testExtend();
     testExtendNoteOff();
+    testToneWeights();
+    testNyquistGuard();
+    testAdaptiveFill();
     testRestore();
     testBassStaysCentred();
     testMixDeltaMatch();
+    testBandSwitching();
     testRobustness();
     testSpectrumAnalyzer();
     benchmark();
