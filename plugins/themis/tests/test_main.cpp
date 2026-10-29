@@ -1260,6 +1260,44 @@ TEST (phase_check_localises_cancellation_that_is_not_a_plain_delay)
     CHECK (BandGrid::centreHz (res.worstBand) < 40.0);
 }
 
+TEST (phase_check_does_not_name_one_delay_for_sources_with_different_offsets)
+{
+    // Equal-level pink-noise sources, each delayed differently in the right channel. The channels are no longer copies of
+    // each other, so no single delay explains the cancelling region: it is reported as "other" with its range.
+    const double fs = 48000;
+    const size_t n = static_cast<size_t> (fs * 20);
+    const size_t offsets[] = { 10, 24, 43, 60, 80, 100 }; // 0.21 ... 2.08 ms
+    for (int sources : { 2, 3, 4, 6 })
+    {
+        std::vector<float> l (n, 0.0f), r (n, 0.0f);
+        for (int s = 0; s < sources; ++s)
+        {
+            const auto x = pinkNoise (n, 100u + static_cast<unsigned> (s));
+            const auto xd = delayed (x, offsets[s]);
+            for (size_t i = 0; i < n; ++i)
+            {
+                l[i] += x[i];
+                r[i] += xd[i];
+            }
+        }
+        const auto res = analysePhaseOf (l, r).report;
+        CHECK (res.level != Level::good);
+        CHECK (res.cause == PhaseCause::other);
+        CHECK (res.delayMs == 0.0f && res.notchHz == 0.0f);
+        CHECK (res.hiHz > res.loHz);
+    }
+
+    // A real delay with something else going on is still a delay: 20 dB-down independent noise in the left channel.
+    const auto a = pinkNoise (n, 3);
+    auto l = a;
+    const auto bed = pinkNoise (n, 77, 0.1f);
+    for (size_t i = 0; i < n; ++i)
+        l[i] += bed[i];
+    const auto res = analysePhaseOf (l, delayed (a, 24)).report;
+    CHECK (res.cause == PhaseCause::delay);
+    CHECK_NEAR (res.delayMs, 0.5, 0.03);
+}
+
 TEST (phase_check_ignores_bands_without_energy)
 {
     PhaseBands ph;

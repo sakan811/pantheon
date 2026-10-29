@@ -21,6 +21,10 @@ inline constexpr double kMaxDelayMs = 4.0;       // longer offsets are echoes, n
 inline constexpr double kDelayStepMs = 0.01;
 inline constexpr double kMinDelayMs = 0.05;      // a smaller offset is indistinguishable from none at 30 Hz+ resolution
 inline constexpr float kMinFit = 0.8f;           // how well a pure delay / polarity flip must explain the phases (1 = perfectly)
+// A delay or a polarity flip makes one channel a copy of the other, so the channels stay coherent across the whole
+// cancelling region (a clean delay reads ~0.99, a delay over a 20 dB-down noise bed ~0.92). Several sources with different
+// offsets read 0.0 to 0.65 there, and then no single delay explains the region however well it fits a few bands.
+inline constexpr float kMinRunCoherence = 0.85f;
 } // namespace phasecheck
 
 enum class PhaseCause
@@ -130,6 +134,18 @@ inline PhaseReport analysePhase (const PhaseBands& ph)
     r.loHz = BandGrid::lowEdgeHz (bestStart);
     r.hiHz = BandGrid::highEdgeHz (bestEnd);
     r.cause = PhaseCause::other;
+
+    // The channels must be copies of each other over the cancelling region for a single delay / flip to be the cause.
+    double runCoherence = 0.0;
+    int runBands = 0;
+    for (int b = bestStart; b <= bestEnd; ++b)
+        if (inRange (b))
+        {
+            runCoherence += ph.coherence[static_cast<size_t> (b)];
+            ++runBands;
+        }
+    if (runBands == 0 || runCoherence / runBands < kMinRunCoherence)
+        return r;
 
     // Fit "phase = -2 pi f tau" (tau > 0: the left channel is late) and "phase = pi - 2 pi f tau" to the coherent bands.
     struct Point { double hz, phase, weight; };
