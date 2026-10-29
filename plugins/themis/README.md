@@ -177,8 +177,8 @@ force-pushed. To report a vulnerability, see [SECURITY.md](SECURITY.md).
 Themis is free software, licensed under the **GNU Affero General Public License v3.0 or later** ([LICENSE](LICENSE)). It is
 built on [JUCE](https://juce.com), which is dual-licensed under the AGPLv3 and a commercial licence; Themis uses the AGPLv3
 option, and JUCE is fetched when you configure the build and is not part of this repository. Third-party components,
-trademarks and the "source only" policy are described in [NOTICE.md](NOTICE.md). Contributions are welcome under the same
-licence ([CONTRIBUTING.md](CONTRIBUTING.md)).
+trademarks and the "source only" policy are described in [NOTICE.md](NOTICE.md). Themis is maintained by one person:
+suggestions and bug reports are welcome as issues, code contributions are not accepted ([CONTRIBUTING.md](CONTRIBUTING.md)).
 
 ## Terms of use
 
