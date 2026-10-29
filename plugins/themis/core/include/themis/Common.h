@@ -2,6 +2,9 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdarg>
+#include <cstdio>
+#include <string>
 
 #if defined(__GNUC__) || defined(__clang__) || defined(_MSC_VER)
  #define THEMIS_RESTRICT __restrict
@@ -39,6 +42,28 @@ inline double emaWeight (double stepSeconds, double tauSeconds)
 // Weight for the `count`-th value (1-based) of a running average: a plain cumulative mean until the exponential
 // average's weight `emaW` is larger, so a fresh average is not dominated by its zero start value.
 inline double runningMeanWeight (double emaW, int count) { return std::max (emaW, 1.0 / static_cast<double> (count)); }
+
+// printf into a std::string (the readout and advice texts are built with it).
+inline std::string format (const char* fmt, ...)
+{
+    char buf[640];
+    va_list args;
+    va_start (args, fmt);
+    std::vsnprintf (buf, sizeof (buf), fmt, args);
+    va_end (args);
+    return buf;
+}
+
+// "+1.5 dB" / "-0.3 dB".
+inline std::string signedDbText (float v) { return format ("%+.1f dB", static_cast<double> (v)); }
+
+// "48 Hz", "1.2 kHz", "12 kHz".
+inline std::string hzText (double hz)
+{
+    if (hz >= 10000.0)
+        return format ("%d kHz", static_cast<int> (std::lround (hz / 1000.0)));
+    return hz >= 1000.0 ? format ("%.1f kHz", hz / 1000.0) : format ("%d Hz", static_cast<int> (std::lround (hz)));
+}
 
 // One-pole smoothing coefficient for a given time constant.
 inline double onePoleCoeff (double timeSeconds, double sampleRate)

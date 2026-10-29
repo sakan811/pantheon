@@ -32,6 +32,8 @@ void ThemisProcessor::prepareToPlay (double sr, int)
     analyzer.prepare (sr);
     lowCrest.prepare (sr);
     scope.prepare (sr);
+    loudness.prepare (sr);
+    audition.prepare (sr);
     prepared = true;
     analysisThread = std::make_unique<AnalysisThread> (analyzer);
     analysisThread->startThread();
@@ -55,7 +57,7 @@ void ThemisProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
     if (!prepared || buffer.getNumChannels() < 2 || buffer.getNumSamples() == 0)
         return;
 
-    // Measure only - the audio itself is left exactly as it came in. The FFT work happens on the analysis thread.
+    // Measure first: everything below sees the input, whatever is being auditioned. The FFT work happens on the analysis thread.
     const float avgSeconds = paramReader.averagingSeconds();
     const float* l = buffer.getReadPointer (0);
     const float* r = buffer.getReadPointer (1);
@@ -65,6 +67,12 @@ void ThemisProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
     lowCrest.setAveragingSeconds (avgSeconds);
     lowCrest.process (l, r, n);
     scope.push (l, r, n);
+    loudness.process (l, r, n);
+
+    // The audition is the only thing that writes to the buffer, and only while a Solo / Mute is engaged. A render
+    // (non-realtime) is never altered.
+    if (!isNonRealtime())
+        audition.process (buffer.getWritePointer (0), buffer.getWritePointer (1), n);
 }
 
 juce::AudioProcessorEditor* ThemisProcessor::createEditor()
@@ -138,6 +146,40 @@ bool ThemisProcessor::readLowCrest (float& outDb) const
         return false;
     outDb = lowCrest.crestDb();
     return true;
+}
+
+themis::MasterInputs ThemisProcessor::masterInputs() const
+{
+    themis::MasterInputs in;
+    in.analysedSeconds = loudness.seconds();
+    in.haveLoudness = loudness.hasData();
+    in.integratedLufs = loudness.integrated();
+    const auto& delivery = params::loudnessTargets[juce::jlimit (0, params::kNumLoudnessTargets - 1, static_cast<int> (paramReader.value (params::loudnessTarget)))];
+    in.targetLufs = delivery.lufs;
+    in.deliveryName = delivery.shortName;
+    readClip (in.clip);
+
+    in.target = activeTarget();
+    in.tolerance = paramReader.value (params::tolerance);
+    in.haveTonal = readSpectrum (in.measured);
+    in.maxHz = themis::BandGrid::usableMaxHz (getSampleRate() > 0.0 ? getSampleRate() : 48000.0);
+
+    themis::BandArray fold {};
+    const bool haveFold = readMonoFold (fold);
+    const auto* device = activeDevice();
+    in.deviceName = device != nullptr ? device->name : std::string();
+    if (in.haveTonal)
+        in.translation = themis::analyseTranslation (in.measured, haveFold ? &fold : nullptr, in.target, device);
+
+    themis::PhaseBands phase {};
+    in.havePhase = readPhase (phase);
+    if (in.havePhase)
+        in.phase = themis::analysePhase (phase);
+    in.haveCrest = readLowCrest (in.lowCrestDb);
+
+    in.frames.resize (themis::FrameHistory::kCapacity);
+    in.frames.resize (static_cast<size_t> (frameHistory().copyRecent (in.frames.data(), themis::FrameHistory::kCapacity)));
+    return in;
 }
 
 bool ThemisProcessor::readClip (themis::ClipTotals& out) const

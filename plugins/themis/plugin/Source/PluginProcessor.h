@@ -4,7 +4,10 @@
 
 #include <juce_audio_formats/juce_audio_formats.h>
 #include <juce_audio_processors/juce_audio_processors.h>
+#include <themis/Audition.h>
+#include <themis/LoudnessMonitor.h>
 #include <themis/LowCrestMeter.h>
+#include <themis/MasterAdvisor.h>
 #include <themis/PhaseCancellation.h>
 #include <themis/StereoScope.h>
 
@@ -12,8 +15,9 @@
 #include <functional>
 #include <memory>
 
-// Audio passes through untouched (zero latency); the plugin only measures the signal's long-term
-// tonal balance and shows it against a reference curve.
+// Audio passes through untouched (zero latency) and the plugin measures it: the long-term tonal balance against a
+// reference curve, translation, phase, clipping, loudness and so on. The one exception is the Solo / Mute audition, which
+// only changes the output while a button is pressed (see themis::Audition); the measurements always see the input.
 class ThemisProcessor : public juce::AudioProcessor
 {
 public:
@@ -51,7 +55,16 @@ public:
         analyzer.requestReset(); // also restarts the clip totals and the history graphs
         lowCrest.requestReset();
         scope.requestReset();
+        loudness.requestReset();
     }
+
+    // Solo / Mute audition: what is played instead of the input (nothing soloed or muted = the input, bit for bit). Not
+    // saved with the session; ignored while the host renders offline so an export can never carry it.
+    void setAudition (const themis::Switches& s) { audition.setSwitches (s); }
+    themis::Switches auditionSwitches() const { return audition.switches(); }
+
+    // Everything the master plan is made of, read from the measurements (message thread).
+    themis::MasterInputs masterInputs() const;
 
     // Thread-safe read of the long-term spectrum. Returns false until enough audio has been analysed.
     bool readSpectrum (themis::BandArray& out) const;
@@ -116,6 +129,8 @@ private:
     themis::TonalAnalyzer analyzer;
     themis::LowCrestMeter lowCrest;
     themis::StereoScope scope;
+    themis::LoudnessMonitor loudness;
+    themis::Audition audition;
     std::unique_ptr<AnalysisThread> analysisThread; // exists between prepareToPlay and releaseResources
     std::atomic<bool> prepared { false };
 

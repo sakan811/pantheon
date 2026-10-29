@@ -18,6 +18,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout createLayout()
                                                        FloatAttr().withStringFromValueFunction ([] (float v, int) { return juce::String (v, 2) + "x"; })));
     layout.add (std::make_unique<AudioParameterChoice> (ParameterID { avgTime, 1 }, "Averaging", avgTimeNames(), kDefaultAvgTime));
     layout.add (std::make_unique<AudioParameterChoice> (ParameterID { device, 1 }, "Translation Device", deviceNames(), kDefaultDevice));
+    layout.add (std::make_unique<AudioParameterChoice> (ParameterID { loudnessTarget, 1 }, "Loudness Target", loudnessTargetNames(), kDefaultLoudnessTarget));
     return layout;
 }
 

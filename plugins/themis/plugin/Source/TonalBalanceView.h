@@ -5,6 +5,7 @@
 #include "ThemisLookAndFeel.h"
 
 #include <themis/HistoryChecks.h>
+#include <themis/LowCrestMeter.h>
 
 #include <cstring>
 
@@ -191,7 +192,7 @@ private:
     int lastDrawableBand() const
     {
         int last = kBandCount - 1;
-        while (last > 0 && themis::BandGrid::centreHz (last) > fs * 0.47)
+        while (last > 0 && themis::BandGrid::centreHz (last) > themis::BandGrid::usableMaxHz (fs))
             --last;
         return last;
     }
@@ -320,8 +321,8 @@ private:
     void drawLowCrest (juce::Graphics& g, const ui::MeterCell& cell) const
     {
         constexpr float kDynamicDb = 15.0f, kCompressedDb = 3.0f; // scale ends (left, right)
-        constexpr float kZoneLoDb = 6.0f, kZoneHiDb = 10.0f;      // typical range for mastered music
-        constexpr float kWarnOutsideDb = 2.0f;                    // further than this outside the zone is bad
+        using themis::lowcrest::kZoneHiDb;
+        using themis::lowcrest::kZoneLoDb;
 
         cell.drawTitle (g, "LOW CREST");
         if (!haveCrest)
@@ -333,8 +334,7 @@ private:
         };
         ui::MeterCell::fillSpan (g, bar, xForCrest (kZoneHiDb), xForCrest (kZoneLoDb), colours::accent.withAlpha (0.35f)); // typical zone
 
-        const float outside = lowCrestDb > kZoneHiDb ? lowCrestDb - kZoneHiDb : lowCrestDb < kZoneLoDb ? kZoneLoDb - lowCrestDb : 0.0f;
-        const auto c = colours::forLevel (themis::translation::classify (outside, 0.0f, kWarnOutsideDb));
+        const auto c = colours::forLevel (themis::lowcrest::level (lowCrestDb));
         ui::MeterCell::drawMarker (g, bar, xForCrest (lowCrestDb), c);
 
         const juce::String note = lowCrestDb > kZoneHiDb ? "  dynamic" : lowCrestDb < kZoneLoDb ? "  compressed" : "";

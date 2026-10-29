@@ -1,5 +1,7 @@
 #pragma once
 
+#include "AdvicePanel.h"
+#include "AuditionPanel.h"
 #include "HistoryViews.h"
 #include "PluginProcessor.h"
 #include "StereoScopeView.h"
@@ -80,6 +82,9 @@ private:
     static constexpr const char* kCurveExtension = ".themiscurve";
     static constexpr int kHistoryHeight = 240; // the two time graphs along the bottom
     static constexpr int kTitleWidth = 120; // the "THEMIS" wordmark; the header rows start after it
+    static constexpr int kSideWidth = 450;  // the right-hand column: master plan on top, stereo scope and audition below
+    static constexpr int kScopeHeight = 228, kAuditionWidth = 200; // the stereo scope and the audition strip along the bottom of that column
+    static constexpr int kPlanRefreshTicks = 15; // the plan is re-read twice a second
 
     ThemisProcessor& proc;
     ThemisLookAndFeel laf;
@@ -88,9 +93,11 @@ private:
     StereoScopeView scopeView;
     ui::LevelView levelView;
     ui::FundamentalView fundamentalView;
+    AdvicePanel advicePanel;
+    AuditionPanel auditionPanel;
 
-    ui::Choice targetBox, avgBox, deviceBox;
-    juce::Label deviceLabel;
+    ui::Choice targetBox, avgBox, deviceBox, loudnessBox;
+    juce::Label deviceLabel, loudnessLabel;
     juce::TextButton learnButton { "Learn from tracks..." }, saveButton { "Save curve" }, loadButton { "Load curve" },
         resetButton { "Reset" };
     juce::Label statusLabel;
@@ -98,7 +105,7 @@ private:
     juce::TooltipWindow tooltipWindow { this, 600 };
 
     std::unique_ptr<juce::FileChooser> chooser;
-    int statusTicks = 0;
+    int statusTicks = 0, planTicks = 0;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ThemisEditor)
 };

@@ -7,9 +7,12 @@ ThemisEditor::ThemisEditor (ThemisProcessor& p)
       scopeView (p),
       levelView (p),
       fundamentalView (p),
+      advicePanel (p),
+      auditionPanel (p),
       targetBox (p.apvts, params::target, params::targetNames()),
       avgBox (p.apvts, params::avgTime, params::avgTimeNames()),
       deviceBox (p.apvts, params::device, params::deviceNames()),
+      loudnessBox (p.apvts, params::loudnessTarget, params::loudnessTargetNames()),
       toleranceSlider (p.apvts, params::tolerance, "Tolerance")
 {
     setLookAndFeel (&laf);
@@ -18,18 +21,26 @@ ThemisEditor::ThemisEditor (ThemisProcessor& p)
     addAndMakeVisible (scopeView);
     addAndMakeVisible (levelView);
     addAndMakeVisible (fundamentalView);
-    for (auto* c : std::initializer_list<juce::Component*> { &targetBox, &avgBox, &deviceBox, &deviceLabel, &learnButton, &saveButton, &loadButton, &resetButton,
-                                                              &statusLabel, &toleranceSlider })
+    addAndMakeVisible (advicePanel);
+    addAndMakeVisible (auditionPanel);
+    for (auto* c : std::initializer_list<juce::Component*> { &targetBox, &avgBox, &deviceBox, &deviceLabel, &loudnessBox, &loudnessLabel, &learnButton, &saveButton, &loadButton,
+                                                              &resetButton, &statusLabel, &toleranceSlider })
         addAndMakeVisible (c);
 
     avgBox.setTooltip ("Averaging window for the long-term curve.");
     deviceBox.setTooltip ("Preview how the balance would translate to a typical playback device (approximate response; "
                           "analysis only, the audio is never changed). \"Off\" hides the preview.");
+    loudnessBox.setTooltip ("The loudness this master is for. The master plan judges the integrated loudness against it: "
+                            "streaming services turn anything louder than -14 LUFS down, so extra loudness there only costs dynamics.");
+    for (auto* label : { &deviceLabel, &loudnessLabel })
+    {
+        label->setColour (juce::Label::textColourId, colours::dim);
+        label->setFont (ui::font (11.5f));
+        label->setJustificationType (juce::Justification::centredRight);
+    }
     deviceLabel.setText ("Translate to", juce::dontSendNotification);
-    deviceLabel.setColour (juce::Label::textColourId, colours::dim);
-    deviceLabel.setFont (ui::font (11.5f));
-    deviceLabel.setJustificationType (juce::Justification::centredRight);
-    resetButton.setTooltip ("Clear the measured curve and start averaging again.");
+    loudnessLabel.setText ("Deliver for", juce::dontSendNotification);
+    resetButton.setTooltip ("Clear every measurement (curve, loudness, peaks, graphs) and start again. Press it, then play the whole track.");
 
     statusLabel.setJustificationType (juce::Justification::centredLeft);
     statusLabel.setFont (ui::font (12.5f));
@@ -37,13 +48,17 @@ ThemisEditor::ThemisEditor (ThemisProcessor& p)
     learnButton.onClick = [this] { chooseReferenceTracks(); };
     saveButton.onClick = [this] { saveCurve(); };
     loadButton.onClick = [this] { loadCurve(); };
-    resetButton.onClick = [this] { proc.resetAnalyzer(); };
+    resetButton.onClick = [this] {
+        proc.resetAnalyzer();
+        advicePanel.refresh();
+    };
 
     setStatus ("Tip: use 'Learn from tracks...' to build a target from your own reference masters.", false);
 
     setResizable (true, true);
-    setResizeLimits (900, 700, 1900, 1200);
-    setSize (1240, 830);
+    setResizeLimits (1120, 760, 2200, 1300);
+    setSize (1440, 900);
+    advicePanel.refresh();
     startTimerHz (30);
 }
 
@@ -59,6 +74,13 @@ void ThemisEditor::timerCallback()
     scopeView.update();
     levelView.update();
     fundamentalView.update();
+    auditionPanel.update();
+    advicePanel.auditionChanged();
+    if (++planTicks >= kPlanRefreshTicks)
+    {
+        planTicks = 0;
+        advicePanel.refresh();
+    }
     if (statusTicks > 0 && --statusTicks == 0)
         statusLabel.setText ({}, juce::dontSendNotification);
 }
@@ -178,6 +200,10 @@ void ThemisEditor::resized()
     resetButton.setBounds (row2.removeFromLeft (70));
     row2.removeFromLeft (12);
     toleranceSlider.setBounds (row2.removeFromLeft (190));
+    row2.removeFromLeft (10);
+    loudnessLabel.setBounds (row2.removeFromLeft (76));
+    row2.removeFromLeft (4);
+    loudnessBox.setBounds (row2.removeFromLeft (150));
     row2.removeFromLeft (12);
     statusLabel.setBounds (row2);
 
@@ -187,7 +213,14 @@ void ThemisEditor::resized()
     history.removeFromLeft (8);
     fundamentalView.setBounds (history);
 
-    scopeView.setBounds (r.removeFromRight (270));
+    auto side = r.removeFromRight (kSideWidth);
     r.removeFromRight (8);
     view.setBounds (r);
+
+    auto lower = side.removeFromBottom (kScopeHeight);
+    side.removeFromBottom (8);
+    advicePanel.setBounds (side);
+    auditionPanel.setBounds (lower.removeFromRight (kAuditionWidth));
+    lower.removeFromRight (8);
+    scopeView.setBounds (lower);
 }

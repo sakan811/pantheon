@@ -103,6 +103,8 @@ static void runDemoProgramme (ThemisProcessor& proc, double seconds, double fs, 
     }
 }
 
+static constexpr int kEditorWidth = 1440, kEditorHeight = 900; // the editor's default size, and the size of the README screenshot
+
 static void pump (int ms) { juce::MessageManager::getInstance()->runDispatchLoopUntil (ms); }
 
 // Every tab of the two history graphs, stacked: the level graph (BANDS, MID / SIDE looking at the low range, LEFT / RIGHT,
@@ -220,6 +222,54 @@ int main (int argc, char** argv)
         settle();
         CHECK (!proc.readSpectrum (m), "reset should clear the curve");
         CHECK (!proc.readLowCrest (crest), "reset should clear the low-end crest");
+    }
+
+    std::printf ("[1a] audition: Solo / Mute change the output only while engaged; the measurements keep seeing the input\n");
+    {
+        const size_t n = 4800;
+        const auto tone = [&] (double hz) {
+            std::vector<float> v (n);
+            for (size_t i = 0; i < n; ++i)
+                v[i] = static_cast<float> (0.25 * std::sin (2.0 * juce::MathConstants<double>::pi * hz * static_cast<double> (i) / fs));
+            return v;
+        };
+        const auto l = tone (300.0); // a mono signal: soloing the side leaves nothing
+        juce::MidiBuffer midi;
+        const auto run = [&] (int blocks) {
+            juce::AudioBuffer<float> buf (2, static_cast<int> (n));
+            for (int b = 0; b < blocks; ++b)
+            {
+                buf.copyFrom (0, 0, l.data(), static_cast<int> (n));
+                buf.copyFrom (1, 0, l.data(), static_cast<int> (n));
+                proc.processBlock (buf, midi);
+            }
+            return buf;
+        };
+        const auto peak = [&] (const juce::AudioBuffer<float>& b) { return b.getMagnitude (0, 0, static_cast<int> (n)); };
+
+        proc.resetAnalyzer();
+        run (1); // applies the reset
+        themis::Switches side;
+        side.solo = themis::Switches::bit (themis::Source::side);
+        proc.setAudition (side);
+        CHECK (proc.auditionSwitches() == side);
+        const auto soloed = run (3);
+        CHECK (peak (soloed) < 1.0e-6f, "soloing the side of a mono signal should be silent, peak %.6f", static_cast<double> (peak (soloed)));
+        CHECK (proc.getLatencySamples() == 0);
+
+        proc.setNonRealtime (true); // a render is never altered
+        const auto rendered = run (3);
+        CHECK (peak (rendered) > 0.24f, "an offline render must ignore the audition, peak %.4f", static_cast<double> (peak (rendered)));
+        proc.setNonRealtime (false);
+
+        proc.setAudition ({});
+        const auto released = run (3);
+        bool identical = true;
+        for (size_t i = 0; i < n; ++i)
+            identical = identical && released.getSample (0, static_cast<int> (i)) == l[i] && released.getSample (1, static_cast<int> (i)) == l[i];
+        CHECK (identical, "releasing every button must restore the input bit for bit");
+        proc.resetAnalyzer();
+        run (1);
     }
 
     std::printf ("[1b] stereo scope: correlation follows the channel coherence, level does not matter\n");
@@ -449,10 +499,40 @@ int main (int argc, char** argv)
         CHECK (editor != nullptr);
         if (editor != nullptr)
         {
-            editor->setSize (1240, 830);
-            pump (400); // let the 30 Hz timer pull data
+            editor->setSize (kEditorWidth, kEditorHeight);
+            pump (700); // let the 30 Hz timer pull data and the plan refresh
+            AdvicePanel* plan = nullptr;
+            AuditionPanel* auditionPanel = nullptr;
+            for (auto* child : editor->getChildren())
+            {
+                plan = plan != nullptr ? plan : dynamic_cast<AdvicePanel*> (child);
+                auditionPanel = auditionPanel != nullptr ? auditionPanel : dynamic_cast<AuditionPanel*> (child);
+            }
+            CHECK (plan != nullptr && auditionPanel != nullptr);
+            if (plan != nullptr)
+            {
+                const auto& advice = plan->currentAdvice();
+                std::printf ("    master plan: %d checks, %d passed, %d items\n", advice.checks, advice.passed, static_cast<int> (advice.items.size()));
+                for (const auto& item : advice.items)
+                    std::printf ("      [%s] %s\n", item.level == themis::Level::bad ? "bad " : "warn", item.headline.c_str());
+                CHECK (!advice.measuring && !advice.items.empty());
+                const auto has = [&] (themis::Topic t) { return std::any_of (advice.items.begin(), advice.items.end(), [t] (const themis::Advice& a) { return a.topic == t; }); };
+                CHECK (has (themis::Topic::clipping) && has (themis::Topic::phase), "the demo programme clips and has a channel delay");
+                CHECK (advice.level() == themis::Level::bad && advice.items.front().level == themis::Level::bad);
+
+                // The HEAR chip of the first item that has one: click it, the buttons follow; click again, they release.
+                const auto hear = plan->firstHearable();
+                CHECK (hear.active(), "some item should be audible");
+                const auto before = proc.auditionSwitches();
+                CHECK (!before.active());
+                proc.setAudition (hear);
+                pump (150);
+                CHECK (auditionPanel != nullptr && auditionPanel->isVisible());
+                if (argc > 1)
+                    std::printf ("    screenshot taken with %s soloed\n", themis::soloText (hear).c_str());
+            }
             auto img = editor->createComponentSnapshot (editor->getLocalBounds(), true, 1.0f);
-            CHECK (img.isValid() && img.getWidth() == 1240 && img.getHeight() == 830);
+            CHECK (img.isValid() && img.getWidth() == kEditorWidth && img.getHeight() == kEditorHeight);
             if (argc > 1)
                 CHECK (writePng (img, argv[1]));
             for (auto* child : editor->getChildren())
@@ -471,12 +551,14 @@ int main (int argc, char** argv)
                     panel->selectTab (0);
                     panel->selectColumn (themis::kAllRanges);
                 }
+            proc.setAudition ({}); // the graphs are shown without it
+            pump (100);
             const auto graphs = renderGraphs (*editor);
             CHECK (graphs.isValid());
             if (argc > 2 && graphs.isValid())
                 CHECK (writePng (graphs, argv[2]));
-            editor->setSize (900, 700);
-            editor->setSize (1900, 1200);
+            editor->setSize (1120, 760);
+            editor->setSize (2200, 1300);
             pump (100);
         }
     }

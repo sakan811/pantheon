@@ -1,4 +1,5 @@
 // Self-contained tests for the Themis DSP core (no framework dependency).
+#include <themis/Audition.h>
 #include <themis/Compressor.h>
 #include <themis/Engine.h>
 #include <themis/Biquad.h>
@@ -10,6 +11,8 @@
 #include <themis/Limiter.h>
 #include <themis/LowCrestMeter.h>
 #include <themis/Loudness.h>
+#include <themis/LoudnessMonitor.h>
+#include <themis/MasterAdvisor.h>
 #include <themis/PhaseCancellation.h>
 #include <themis/StereoScope.h>
 #include <themis/StereoTools.h>
@@ -1737,6 +1740,512 @@ TEST (history_bass_report_counts_balance_and_sub_floor_time)
     std::vector<FrameStats> none (50);
     CHECK (!history::analyseBass (none.data(), 50).have);
 }
+
+// ---- audition (solo / mute) ---------------------------------------------------------------------------------------
+namespace
+{
+// Runs `left` / `right` through an Audition with the given switches, in blocks, and returns the output.
+struct Stereo
+{
+    std::vector<float> l, r;
+};
+
+Stereo audition (const Switches& sw, const std::vector<float>& l, const std::vector<float>& r, double fs = 48000.0, int block = 256)
+{
+    Audition a;
+    a.prepare (fs);
+    a.setSwitches (sw);
+    Stereo out { l, r };
+    for (size_t pos = 0; pos < l.size(); pos += static_cast<size_t> (block))
+    {
+        const int n = static_cast<int> (std::min<size_t> (static_cast<size_t> (block), l.size() - pos));
+        a.process (out.l.data() + pos, out.r.data() + pos, n);
+    }
+    return out;
+}
+
+Switches solo (std::initializer_list<Source> s)
+{
+    Switches sw;
+    for (auto x : s)
+        sw.solo |= Switches::bit (x);
+    return sw;
+}
+Switches mute (std::initializer_list<Source> s)
+{
+    Switches sw;
+    for (auto x : s)
+        sw.mute |= Switches::bit (x);
+    return sw;
+}
+
+// Level of the second half of a signal (past the fade and the filters' settling) in dB.
+double tailDb (const std::vector<float>& v) { return rmsDb (v, v.size() / 2, v.size()); }
+} // namespace
+
+TEST (audition_leaves_the_audio_bit_exact_when_nothing_is_engaged)
+{
+    const auto l = whiteNoise (20000, 1), r = whiteNoise (20000, 2);
+    const auto out = audition ({}, l, r);
+    CHECK (out.l == l && out.r == r);
+
+    // ... and again after something was engaged and released.
+    Audition a;
+    a.prepare (48000.0);
+    auto ll = l, rr = r;
+    a.setSwitches (mute ({ Source::side, Source::low }));
+    a.process (ll.data(), rr.data(), 9000);
+    a.setSwitches ({});
+    a.process (ll.data() + 9000, rr.data() + 9000, 5000); // fades back
+    ll = l;
+    rr = r;
+    a.process (ll.data(), rr.data(), 20000);
+    CHECK (ll == l && rr == r);
+}
+
+TEST (audition_resolves_solo_and_mute_within_each_group)
+{
+    auto a = resolve ({});
+    CHECK (a.untouched());
+    a = resolve (mute ({ Source::side }));
+    CHECK (a.mid && !a.side && a.left && a.right && a.bandsAll());
+    a = resolve (solo ({ Source::side }));
+    CHECK (!a.mid && a.side);
+    a = resolve (solo ({ Source::mid, Source::side }));
+    CHECK (a.mid && a.side);
+    Switches both = solo ({ Source::mid });
+    both.mute = Switches::bit (Source::mid);
+    a = resolve (both);
+    CHECK (!a.mid && !a.side); // soloed and muted: silent, and the solo still silences the rest of the group
+    a = resolve (solo ({ Source::highMid }));
+    CHECK (!a.band[0] && !a.band[1] && a.band[2] && !a.band[3] && a.mid && a.left); // other groups are not touched
+    a = resolve (mute ({ Source::low, Source::high }));
+    CHECK (!a.band[0] && a.band[1] && a.band[2] && !a.band[3]);
+    CHECK (Switches::unpack (solo ({ Source::side, Source::high }).pack()) == solo ({ Source::side, Source::high }));
+    CHECK (Switches::unpack (mute ({ Source::left }).pack()) == mute ({ Source::left }));
+}
+
+TEST (audition_plays_the_mid_and_side_signals)
+{
+    const double fs = 48000.0;
+    const auto tone = sine (fs, 500, -12, 1.0), other = sine (fs, 1300, -12, 1.0);
+    // L = M + S, R = M - S with M = a 500 Hz tone and S = a 1300 Hz tone.
+    std::vector<float> l (tone.size()), r (tone.size());
+    for (size_t i = 0; i < l.size(); ++i)
+    {
+        l[i] = tone[i] + other[i];
+        r[i] = tone[i] - other[i];
+    }
+    const auto midOnly = audition (solo ({ Source::mid }), l, r);
+    CHECK (midOnly.l.size() == l.size());
+    for (size_t i = 24000; i < l.size(); i += 101)
+    {
+        CHECK_NEAR (midOnly.l[i], tone[i], 1.0e-5);
+        CHECK_NEAR (midOnly.r[i], tone[i], 1.0e-5);
+    }
+    const auto sideOnly = audition (solo ({ Source::side }), l, r);
+    const auto muteMid = audition (mute ({ Source::mid }), l, r);
+    for (size_t i = 24000; i < l.size(); i += 997)
+    {
+        CHECK_NEAR (sideOnly.l[i], other[i], 1.0e-5);
+        CHECK_NEAR (sideOnly.r[i], -other[i], 1.0e-5);
+        CHECK_NEAR (muteMid.l[i], other[i], 1.0e-5);
+    }
+    const auto mono = audition (mute ({ Source::side }), l, r);
+    for (size_t i = 24000; i < l.size(); i += 997)
+    {
+        CHECK_NEAR (mono.l[i], tone[i], 1.0e-5); // muting the side is the mono sum
+        CHECK_NEAR (mono.r[i], tone[i], 1.0e-5);
+    }
+    // A mono signal has no side: soloing it is silence.
+    const auto silent = audition (solo ({ Source::side }), tone, tone);
+    CHECK (tailDb (silent.l) < -120.0 && tailDb (silent.r) < -120.0);
+}
+
+TEST (audition_solos_and_mutes_the_channels)
+{
+    const double fs = 48000.0;
+    const auto a = sine (fs, 500, -12, 1.0), b = sine (fs, 1300, -12, 1.0);
+    const auto soloL = audition (solo ({ Source::left }), a, b);
+    const auto soloR = audition (solo ({ Source::right }), a, b);
+    const auto muteL = audition (mute ({ Source::left }), a, b);
+    const auto none = audition (mute ({ Source::left, Source::right }), a, b);
+    const auto bothSoloed = audition (solo ({ Source::left, Source::right }), a, b);
+    for (size_t i = 24000; i < a.size(); i += 997)
+    {
+        CHECK_NEAR (soloL.l[i], a[i], 1.0e-6); // a soloed channel is played on both sides
+        CHECK_NEAR (soloL.r[i], a[i], 1.0e-6);
+        CHECK_NEAR (soloR.l[i], b[i], 1.0e-6);
+        CHECK_NEAR (soloR.r[i], b[i], 1.0e-6);
+        CHECK_NEAR (muteL.l[i], 0.0, 1.0e-6); // a muted one is silent where it was
+        CHECK_NEAR (muteL.r[i], b[i], 1.0e-6);
+        CHECK_NEAR (bothSoloed.l[i], a[i], 1.0e-6);
+        CHECK_NEAR (bothSoloed.r[i], b[i], 1.0e-6);
+    }
+    CHECK (tailDb (none.l) < -120.0 && tailDb (none.r) < -120.0);
+    Switches soloAndMute = solo ({ Source::left });
+    soloAndMute.mute = Switches::bit (Source::left);
+    const auto silent = audition (soloAndMute, a, b);
+    CHECK (tailDb (silent.l) < -120.0 && tailDb (silent.r) < -120.0);
+}
+
+TEST (audition_isolates_the_energy_ranges)
+{
+    const double fs = 48000.0;
+    // A tone in the middle of each range: 60 Hz, 400 Hz, 2.5 kHz, 12 kHz.
+    const double tones[kNumEnergyRanges] = { 60.0, 400.0, 2500.0, 12000.0 };
+    for (int soloed = 0; soloed < kNumEnergyRanges; ++soloed)
+        for (int t = 0; t < kNumEnergyRanges; ++t)
+        {
+            const auto x = sine (fs, tones[t], -12, 1.0);
+            const auto out = audition (solo ({ static_cast<Source> (kFirstBandSource + soloed) }), x, x);
+            const double dB = tailDb (out.l) - tailDb (x);
+            if (t == soloed)
+                CHECK_NEAR (dB, 0.0, 0.7);
+            else
+                CHECK (dB < -18.0); // 4th-order crossovers: well under a decade away is at least 18 dB down
+        }
+}
+
+TEST (audition_muting_a_range_removes_only_that_range)
+{
+    const double fs = 48000.0;
+    // Muting LOW and HIGH leaves the middle two ranges intact (flat magnitude through the crossovers and their all-passes).
+    // (A 4th-order crossover is 0.5 dB down half an octave from its corner; the tones are at least that far in.)
+    for (double hz : { 300.0, 500.0, 2000.0, 3000.0 })
+    {
+        const auto x = sine (fs, hz, -12, 1.0);
+        const auto out = audition (mute ({ Source::low, Source::high }), x, x);
+        CHECK_NEAR (tailDb (out.l) - tailDb (x), 0.0, 0.8);
+    }
+    // The four ranges add back up to a flat-magnitude signal: at each corner, where the neighbours overlap most.
+    for (double hz : { 120.0, 1000.0, 6000.0 })
+    {
+        const auto x = sine (fs, hz, -12, 1.0);
+        std::vector<float> sum (x.size(), 0.0f);
+        for (int r = 0; r < kNumEnergyRanges; ++r)
+        {
+            const auto part = audition (solo ({ static_cast<Source> (kFirstBandSource + r) }), x, x);
+            for (size_t i = 0; i < sum.size(); ++i)
+                sum[i] += part.l[i];
+        }
+        CHECK_NEAR (tailDb (sum) - tailDb (x), 0.0, 0.3);
+    }
+    // Muting one range leaves a noise signal's other ranges at the same level: the total loses just what that range held.
+    const auto noise = whiteNoise (96000, 5);
+    const auto out = audition (mute ({ Source::high }), noise, noise);
+    // White noise is flat to 24 kHz, so what is left is the 4th-order low-pass at 6 kHz: 5 / 24 of the power (the integral of
+    // 1 / (1 + x^4)^2 is 0.833 corner-frequencies wide), i.e. 6.8 dB down.
+    const double lost = tailDb (noise) - tailDb (out.l);
+    CHECK_NEAR (lost, 6.8, 0.4);
+}
+
+TEST (audition_fades_without_clicks)
+{
+    const double fs = 48000.0;
+    const auto x = sine (fs, 100, -6, 1.0);
+    for (const auto& sw : { mute ({ Source::mid, Source::side }), solo ({ Source::side }), mute ({ Source::low }), mute ({ Source::left }) })
+    {
+        const auto out = audition (sw, x, x, fs, 480);
+        double maxStep = 0.0;
+        for (size_t i = 1; i < out.l.size(); ++i)
+            maxStep = std::max (maxStep, static_cast<double> (std::abs (out.l[i] - out.l[i - 1])));
+        // The input's own steepest step is 2 pi 100 / 48000 * 0.5 = 0.0065; the fade adds at most 1 / 480 of the level per sample.
+        CHECK (maxStep < 0.012);
+    }
+}
+
+TEST (audition_follows_the_switches_in_both_directions)
+{
+    const double fs = 48000.0;
+    Audition a;
+    a.prepare (fs);
+    const auto x = sine (fs, 500, -12, 1.0);
+    auto run = [&] (const Switches& sw) {
+        a.setSwitches (sw);
+        auto l = x, r = x;
+        a.process (l.data(), r.data(), static_cast<int> (l.size()));
+        return l;
+    };
+    CHECK (tailDb (run (solo ({ Source::side }))) < -120.0);
+    CHECK_NEAR (tailDb (run ({})), tailDb (x), 1.0e-6);
+    CHECK (tailDb (run (mute ({ Source::lowMid }))) < -18.0);
+    CHECK_NEAR (tailDb (run ({})), tailDb (x), 0.01);
+}
+
+// ---- loudness monitor --------------------------------------------------------------------------------------------
+TEST (loudness_monitor_reads_the_reference_sine_and_resets)
+{
+    const double fs = 48000.0;
+    LoudnessMonitor m;
+    m.prepare (fs);
+    CHECK (!m.hasData());
+    const auto s = sine (fs, 997, -20, 10.0);
+    m.process (s.data(), s.data(), 48000);
+    CHECK (!m.hasData()); // 1 s is not enough yet
+    m.process (s.data(), s.data(), 48000 * 4);
+    CHECK (m.hasData());
+    CHECK_NEAR (m.integrated(), -20.0, 0.15);
+    CHECK_NEAR (m.shortTerm(), -20.0, 0.15);
+    CHECK_NEAR (m.maxShortTerm(), -20.0, 0.15);
+    CHECK_NEAR (m.seconds(), 5.0, 1.0e-6);
+
+    m.requestReset();
+    CHECK (!m.hasData()); // a pending reset counts at once
+    m.process (s.data(), s.data(), 480);
+    CHECK_NEAR (m.seconds(), 0.01, 1.0e-6);
+    CHECK (m.integrated() < -100.0f);
+}
+
+TEST (loudness_monitor_tracks_the_loudest_section)
+{
+    const double fs = 48000.0;
+    LoudnessMonitor m;
+    m.prepare (fs);
+    const auto loud = sine (fs, 997, -12, 6.0), quiet = sine (fs, 997, -30, 6.0);
+    m.process (loud.data(), loud.data(), static_cast<int> (loud.size()));
+    m.process (quiet.data(), quiet.data(), static_cast<int> (quiet.size()));
+    CHECK_NEAR (m.maxShortTerm(), -12.0, 0.2);
+    CHECK (m.shortTerm() < -29.0f); // the last 3 s are the quiet part
+    CHECK (m.integrated() > -14.0f); // the relative gate drops the quiet part from the integrated value
+}
+
+// ---- master advisor ----------------------------------------------------------------------------------------------
+namespace
+{
+// A programme that measures clean everywhere: on target, mono-safe, no clips, at the delivery loudness.
+MasterInputs cleanMaster()
+{
+    MasterInputs in;
+    in.analysedSeconds = 120.0;
+    in.haveLoudness = true;
+    in.integratedLufs = -14.0f;
+    in.clip.have = true;
+    in.clip.truePeakDb = -1.5f;
+    in.clip.samplePeakDb = -1.8f;
+    in.haveTonal = true;
+    in.target = TargetCurve::builtIns()[1];
+    in.measured = in.target.medianDb;
+    in.translation.haveFold = true;
+    in.haveCrest = true;
+    in.lowCrestDb = 8.0f;
+    return in;
+}
+
+const Advice* find (const MasterAdvice& a, Topic t)
+{
+    for (const auto& i : a.items)
+        if (i.topic == t)
+            return &i;
+    return nullptr;
+}
+
+// The item about `t` for these inputs. Valid until the next call (the advice lives in a static).
+const Advice* pick (const MasterInputs& in, Topic t)
+{
+    static MasterAdvice last;
+    last = advise (in);
+    return find (last, t);
+}
+} // namespace
+
+TEST (advisor_has_nothing_to_say_about_a_clean_master)
+{
+    const auto a = advise (cleanMaster());
+    CHECK (!a.measuring);
+    CHECK (a.items.empty() && a.level() == Level::good);
+    CHECK (a.checks >= 5 && a.passed == a.checks);
+}
+
+TEST (advisor_waits_for_enough_audio_but_still_reports_clipping)
+{
+    auto in = cleanMaster();
+    in.analysedSeconds = 5.0;
+    in.clip.clipEvents = 12;
+    in.integratedLufs = -6.0f; // would be a loudness item
+    in.lowCrestDb = 2.0f;
+    const auto a = advise (in);
+    CHECK (a.measuring);
+    CHECK (a.items.size() == 1 && a.items[0].topic == Topic::clipping && a.items[0].level == Level::bad);
+}
+
+TEST (advisor_names_the_ceiling_move_for_clipping_and_hot_peaks)
+{
+    auto in = cleanMaster();
+    in.clip.truePeakDb = 0.4f;
+    in.clip.clipEvents = 30;
+    auto* clip = pick (in, Topic::clipping);
+    CHECK (clip != nullptr && clip->level == Level::bad && clip->headline.find ("lower the ceiling 1.4 dB") != std::string::npos);
+
+    in.clip.clipEvents = 0;
+    in.clip.truePeakDb = -0.4f; // 0.6 dB over the -1 dBTP ceiling
+    clip = pick (in, Topic::clipping);
+    CHECK (clip != nullptr && clip->level == Level::warn && clip->headline.find ("by 0.6 dB") != std::string::npos);
+
+    in.clip.truePeakDb = -1.0f;
+    CHECK (pick (in, Topic::clipping) == nullptr);
+
+    in.clip.clipEvents = 5; // flat tops under the ceiling: nothing to lower, the clipper has to ease off
+    in.clip.truePeakDb = -1.2f;
+    clip = pick (in, Topic::clipping);
+    CHECK (clip != nullptr && clip->level == Level::bad && clip->headline.find ("ease the clipper or limiter drive until") != std::string::npos);
+}
+
+TEST (advisor_compares_loudness_with_the_delivery_target)
+{
+    auto in = cleanMaster();
+    in.integratedLufs = -8.0f; // 6 LU over a -14 LUFS target
+    in.clip.truePeakDb = -1.0f;
+    auto* l = pick (in, Topic::loudness);
+    CHECK (l != nullptr && l->level == Level::bad);
+    CHECK (l != nullptr && l->headline.rfind ("Take about 6.0 dB off", 0) == 0);
+    CHECK (l != nullptr && l->why.find ("Spotify") != std::string::npos);
+
+    in.targetLufs = -9.0f; // a loud release: -8 LUFS is 1 LU over, fine
+    in.deliveryName = "Loud";
+    CHECK (pick (in, Topic::loudness) == nullptr);
+
+    in.targetLufs = -14.0f;
+    in.integratedLufs = -19.0f; // 5 LU under, with 5.5 dB of peak headroom... 4 dB of it is needed
+    in.clip.truePeakDb = -7.0f;
+    l = pick (in, Topic::loudness);
+    CHECK (l != nullptr && l->level == Level::bad && l->headline.rfind ("Raise the level about 5.0 dB", 0) == 0);
+    CHECK (l != nullptr && l->why.find ("plain gain") != std::string::npos);
+
+    in.integratedLufs = -15.0f; // within 2 LU
+    in.clip.truePeakDb = -1.5f;
+    CHECK (pick (in, Topic::loudness) == nullptr);
+}
+
+TEST (advisor_points_at_the_region_that_is_out_of_tolerance)
+{
+    auto in = cleanMaster();
+    const auto& t = in.target;
+    // +4 dB over 250 - 630 Hz.
+    for (int i = 0; i < BandGrid::kNum; ++i)
+        if (BandGrid::centreHz (i) >= 250.0 && BandGrid::centreHz (i) <= 630.0)
+            in.measured[static_cast<size_t> (i)] += 4.0f;
+    const auto a = advise (in);
+    const auto* tonal = find (a, Topic::tonal);
+    CHECK (tonal != nullptr);
+    if (tonal != nullptr)
+    {
+        CHECK (tonal->headline.rfind ("Cut about", 0) == 0);
+        CHECK (tonal->headline.find ("bell") != std::string::npos);
+        CHECK (tonal->hear.solo == Switches::bit (Source::lowMid)); // 250 - 630 Hz is in LOW-MID
+        CHECK (tonal->why.find (t.name) != std::string::npos);
+        CHECK (tonal->level != Level::good);
+    }
+    // The cut is the amount that brings the region back inside the tolerance: less than the whole +4 dB.
+    CHECK (tonal != nullptr && tonal->headline.find ("4.0 dB") == std::string::npos);
+
+    // A hole in the highs reads as a boost, and runs to the top of the curve: a shelf.
+    in = cleanMaster();
+    for (int i = 0; i < BandGrid::kNum; ++i)
+        if (BandGrid::centreHz (i) >= 9000.0)
+            in.measured[static_cast<size_t> (i)] -= 9.0f;
+    in.maxHz = 20000.0;
+    const auto* high = pick (in, Topic::tonal);
+    CHECK (high != nullptr && high->headline.rfind ("Boost about", 0) == 0 && high->headline.find ("high shelf") != std::string::npos);
+
+    // Bands beyond the signal's Nyquist are not judged.
+    in = cleanMaster();
+    for (int i = 0; i < BandGrid::kNum; ++i)
+        if (BandGrid::centreHz (i) >= 9000.0)
+            in.measured[static_cast<size_t> (i)] = -200.0f;
+    in.maxHz = 8000.0;
+    CHECK (pick (in, Topic::tonal) == nullptr);
+}
+
+TEST (advisor_speaks_for_each_stereo_problem)
+{
+    auto in = cleanMaster();
+    in.translation.lowMonoLossDb = 2.0f;
+    in.translation.lowMonoLevel = Level::bad;
+    in.translation.monoLossDb = 3.0f;
+    in.translation.monoLevel = Level::warn;
+    in.translation.worstBand = 30;
+    in.translation.worstBandLossDb = 8.0f;
+    in.havePhase = true;
+    in.phase.have = true;
+    in.phase.level = Level::bad;
+    in.phase.cause = PhaseCause::delay;
+    in.phase.delayMs = 0.5f;
+    in.phase.notchHz = 1000.0f;
+    in.phase.worstLossDb = 19.0f;
+    in.phase.loHz = 500.0;
+    in.phase.hiHz = 1500.0;
+    const auto a = advise (in);
+    const auto* phase = find (a, Topic::phase);
+    const auto* low = find (a, Topic::lowEndMono);
+    const auto* fold = find (a, Topic::monoFold);
+    CHECK (phase != nullptr && phase->headline.find ("0.50 ms") != std::string::npos && phase->why.find ("1.0 kHz") != std::string::npos);
+    CHECK (low != nullptr && low->hear.solo == (Switches::bit (Source::side) | Switches::bit (Source::low)));
+    CHECK (fold != nullptr && fold->level == Level::warn && fold->hear.solo == Switches::bit (Source::side));
+    // Worst first: both bad items come before the warning.
+    CHECK (a.items.size() >= 3 && a.items[0].level == Level::bad && a.items[1].level == Level::bad && a.items[2].level == Level::warn);
+    CHECK (a.items[0].topic == Topic::phase); // phase is ahead of the low end in priority
+
+    in.phase.cause = PhaseCause::polarity;
+    CHECK (pick (in, Topic::phase)->headline.rfind ("Flip the polarity", 0) == 0);
+}
+
+TEST (advisor_reads_the_low_end_dynamics_and_the_history)
+{
+    auto in = cleanMaster();
+    in.lowCrestDb = 4.0f; // 2 dB under the typical zone
+    auto* crest = pick (in, Topic::lowCrest);
+    CHECK (crest != nullptr && crest->headline.rfind ("Open up the low end", 0) == 0);
+    in.lowCrestDb = 13.0f;
+    crest = pick (in, Topic::lowCrest);
+    CHECK (crest != nullptr && crest->headline.rfind ("Tame the low-end peaks", 0) == 0 && crest->hear.solo == Switches::bit (Source::low));
+
+    in = cleanMaster();
+    std::vector<FrameStats> frames (100);
+    for (size_t i = 0; i < frames.size(); ++i)
+        for (int s = 0; s < kNumSignals; ++s)
+            for (int c = 0; c < kNumEnergyColumns; ++c)
+                frames[i].energy (static_cast<Signal> (s), c) = -30.0f;
+    for (auto& f : frames)
+        f.energy (Signal::left, kAllRanges) = -28.0f; // left 2 dB louder than right
+    in.frames = frames;
+    auto a = advise (in);
+    const auto* bal = find (a, Topic::balance);
+    CHECK (bal != nullptr && bal->level == Level::bad && bal->headline.find ("left channel down about 2.0 dB") != std::string::npos);
+    CHECK (find (a, Topic::swing) == nullptr && find (a, Topic::bass) == nullptr); // flat levels, no bass tracked
+
+    for (size_t i = 0; i < frames.size(); ++i)
+        frames[i].energy (Signal::stereo, 0) = i % 2 ? -20.0f : -40.0f; // the low range jumps by 20 dB
+    in.frames = frames;
+    a = advise (in);
+    const auto* swing = find (a, Topic::swing);
+    CHECK (swing != nullptr && swing->level == Level::warn); // a hint, never an alarm
+
+    for (auto& f : frames)
+    {
+        f.f0Hz = 35.0f; // a bass that lives under 40 Hz
+        f.fundamentalDb = -30.0f;
+        f.harmonicsDb = -32.0f;
+    }
+    in.frames = frames;
+    a = advise (in);
+    const auto* bass = find (a, Topic::bass);
+    CHECK (bass != nullptr && bass->headline.find ("under 40 Hz") != std::string::npos && bass->hear.solo == Switches::bit (Source::low));
+}
+
+TEST (advisor_checks_the_selected_device)
+{
+    auto in = cleanMaster();
+    in.translation.haveDevice = true;
+    in.translation.extraLossDb = 4.0f;
+    in.translation.deviceLevel = Level::bad;
+    in.deviceName = "Phone speaker";
+    const auto* d = pick (in, Topic::device);
+    CHECK (d != nullptr && d->headline.find ("Phone speaker") != std::string::npos && d->why.find ("4.0 dB more") != std::string::npos);
+    in.translation.deviceLevel = Level::good;
+    CHECK (pick (in, Topic::device) == nullptr);
+}
+
 
 int main()
 {

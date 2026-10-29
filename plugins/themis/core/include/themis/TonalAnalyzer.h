@@ -25,6 +25,9 @@ struct BandGrid
     static constexpr double kF0 = 20.0;
     static constexpr double kMaxHz = 20000.0; // top of the audible range: displays and device ranges span [kF0, kMaxHz]
 
+    // Bands above this share of the sampling rate sit at the analysis' roll-off: displays and checks leave them out.
+    static double usableMaxHz (double sampleRate) { return sampleRate * 0.47; }
+
     static double centreHz (int i) { return kF0 * std::pow (2.0, static_cast<double> (i) / kPerOctave); }
     static double lowEdgeHz (int i) { return centreHz (i) * std::pow (2.0, -0.5 / kPerOctave); }
     static double highEdgeHz (int i) { return centreHz (i) * std::pow (2.0, 0.5 / kPerOctave); }

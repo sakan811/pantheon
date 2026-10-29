@@ -2,6 +2,7 @@
 
 #include "Biquad.h"
 #include "Common.h"
+#include "Translation.h"
 
 #include <atomic>
 #include <cmath>
@@ -9,6 +10,19 @@
 
 namespace themis
 {
+namespace lowcrest
+{
+// Hand-authored guesses, not measured data: the typical crest of the 20-250 Hz band of a mastered mix, and how far
+// outside it a master is a warning (any distance) or bad.
+inline constexpr float kZoneLoDb = 6.0f, kZoneHiDb = 10.0f;
+inline constexpr float kBadOutsideDb = 2.0f;
+
+// Distance outside the typical zone in dB: positive when too dynamic, negative when too compressed, 0 inside it.
+inline float outsideZoneDb (float crestDb) { return crestDb > kZoneHiDb ? crestDb - kZoneHiDb : crestDb < kZoneLoDb ? crestDb - kZoneLoDb : 0.0f; }
+
+inline Level level (float crestDb) { return translation::classify (std::abs (outsideZoneDb (crestDb)), 0.0f, kBadOutsideDb); }
+} // namespace lowcrest
+
 // Low-end crest factor (peak / RMS in dB) of the 20-250 Hz band of a stereo signal (analysed as mid),
 // the same band and quantity as the "Low End Crest Factor" view in iZotope Tonal Balance Control.
 // Low values = a compressed / sustained low end, high values = a punchy / dynamic one.
