@@ -14,20 +14,31 @@ on:
 permissions:
   contents: read
 
+# A newer push to the same branch or pull request makes the older run pointless.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   dsp-tests:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: DSP unit tests
         run: make test
 
   macos:
     # Universal (arm64 + x86_64) VST3 + AU, the plugin formats for macOS.
     runs-on: macos-14
+    timeout-minutes: 45
     needs: dsp-tests
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Configure
         run: >
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
@@ -53,9 +64,12 @@ jobs:
   linux-plugin-compile:
     # Catches plugin-layer compile errors on every push without needing a Mac.
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     needs: dsp-tests
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Dependencies
         run: |
           sudo apt-get update

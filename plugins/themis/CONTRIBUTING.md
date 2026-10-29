@@ -9,5 +9,7 @@ for every fact and threshold). The commands to build and test are in the [README
 - A change that alters what a check does, a limit or a default updates the README in the same pull request.
 - Only submit code you wrote yourself, or that comes with a licence compatible with the AGPL; do not paste code, fonts or
   images from other products. Do not add presets or curves taken from commercial products.
+- Found a vulnerability? Report it privately, see [SECURITY.md](SECURITY.md). Workflow changes keep actions pinned to a commit
+  SHA and the token permissions read-only (README, "Continuous integration").
 - By submitting a contribution you agree that it is licensed under the same terms as the project,
   **AGPL-3.0-or-later** (see [LICENSE](LICENSE)).

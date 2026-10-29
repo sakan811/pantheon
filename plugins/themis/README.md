@@ -143,6 +143,13 @@ tests/                 test_main.cpp (DSP), plugin_smoke.cpp (headless JUCE)
 Linux, and runs the DSP tests, on every push. It checks that the code builds and publishes nothing: there are no releases and
 no downloadable binaries, by design.
 
+Security checks, all free for a public repository and none of them publishing anything: [codeql.yml](.github/workflows/codeql.yml)
+(CodeQL static analysis of the C++ on every push, pull request and weekly), [dependency-review.yml](.github/workflows/dependency-review.yml)
+(fails a pull request that adds a dependency with a known high-severity vulnerability) and Dependabot
+([dependabot.yml](.github/dependabot.yml)) keeping the actions up to date. The workflows have read-only tokens and pin every
+action to a commit SHA. Secret scanning with push protection is on, and `main` requires the build checks to pass and cannot be
+force-pushed. To report a vulnerability, see [SECURITY.md](SECURITY.md).
+
 ### What has and hasn't been verified
 
 | Verified (Linux aarch64 and macOS arm64, JUCE 8.0.6) | Not yet verified |
