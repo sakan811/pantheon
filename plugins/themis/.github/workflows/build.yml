@@ -23,7 +23,7 @@ jobs:
         run: make test
 
   macos:
-    # Universal (arm64 + x86_64) VST3 + AU, the formats FL Studio for macOS loads.
+    # Universal (arm64 + x86_64) VST3 + AU, the plugin formats for macOS.
     runs-on: macos-14
     needs: dsp-tests
     steps:

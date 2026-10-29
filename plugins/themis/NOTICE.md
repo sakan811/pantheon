@@ -38,7 +38,6 @@ what a statement is about. Themis is **not affiliated with, endorsed by or spons
 
 - VST is a trademark of Steinberg Media Technologies GmbH, registered in Europe and other countries.
 - Audio Units, macOS and Apple Silicon are trademarks of Apple Inc.
-- FL Studio is a trademark of Image-Line.
 - JUCE is a trademark of Raw Material Software Limited.
 
 "Themis" is the name of this project and "Themis Verdict" the name of the plugin. If you publish a fork or a build, give it a name of your own where that could be

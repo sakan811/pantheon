@@ -2,7 +2,7 @@
 
 *Themis* is the project, *Verdict* is the plugin: the mastering checks, and the verdict they add up to.
 
-Themis Verdict is a **mastering check suite in one plugin** for FL Studio (and any VST3 / AU host): tonal balance against a
+Themis Verdict is a **mastering check suite in one plugin** for any VST3 / AU host: tonal balance against a
 reference curve, device translation, mono fold and phase cancellation, stereo correlation, clipping and true peak, low-end dynamics, bass fundamental and energy over time: what you
 need to look at before you call a master done.
 
@@ -19,7 +19,7 @@ into a short list of what to do next.
   phosphor traces, lamps for every verdict, push switches that light up, rotary knobs with lit scales and a swing-needle
   correlation meter. It is drawn entirely from code: no image, font or sound files are shipped.
 - Formats: **VST3 + AU** (macOS, universal arm64 + x86_64, macOS 11+), VST3 + Standalone on Linux/Windows if you build there.
-  FL Studio for macOS loads VST3, AU and CLAP; there is no VST2 for new plugins.
+  There is no VST2 build: VST2 is not available for new plugins.
 - Built with [JUCE](https://juce.com) 8. All DSP lives in a dependency-free C++17 core ([core/include/themis](core/include/themis))
   with its own unit tests.
 
@@ -75,7 +75,7 @@ cmake --build build --target Themis_VST3 Themis_AU -j8
 The default configuration builds a **universal** binary (arm64 + x86_64) and copies the plugins to
 `~/Library/Audio/Plug-Ins/VST3` and `~/Library/Audio/Plug-Ins/Components`. JUCE is fetched automatically (needs git + network).
 
-Then in FL Studio: *Options → Manage plugins → Find plugins* (rescan after switching Rosetta/native mode). Themis appears
+Then rescan plugins in your host (rescan after switching Rosetta/native mode). Themis appears
 under *Fx / Analyzer* (VST3 category) / *Themis Audio* (AU), as "Themis Verdict". On Apple Silicon the binary must be signed, ad-hoc is enough for local use:
 
 ```bash
@@ -125,8 +125,8 @@ tests/                 test_main.cpp (DSP), plugin_smoke.cpp (headless JUCE)
 | Verified (Linux aarch64 and macOS arm64, JUCE 8.0.6) | Not yet verified |
 |---|---|
 | 2886 DSP checks: K-weighting vs the ITU coefficient table, −20 LUFS reference sine at 44.1/48/96 kHz, gating, inter-sample true peak, limiter ceiling, compressor curve, M/S EQ targeting, pink/white-noise spectral slopes, low-end crest meter (sine = 3 dB, band limiting, reset, NaN recovery), per-band mono fold (mono 0 dB, uncorrelated −3 dB, inverted → cancels, level independent), per-band phase / coherence, the phase-cancellation verdict (mono, uncorrelated, polarity flip, 0.5 and 1.25 ms delay with its notch frequency, a low-end-only flip), the energy history (calibrated against sines, silence, reset; mid / side / left / right against centred, one-sided and inverted tones), clip detection (a hard clipper at −1 dBFS, clean sines, a 16-bit quantised bass sine that must not count, plateaus across blocks, inter-sample peaks, totals and reset) and the verdicts on the history (swing, width, balance, peaks, bass), the audition (bit-exact when idle, mid / side / left / right against known signals, each range isolated, ranges summing back flat at the crossover corners, fades without clicks), the loudness monitor (the BS.1770 reference sine, reset, loudest section) and the master plan (every item and its numbers, worst first, the tonal move, waiting for enough audio), the bass fundamental estimator (pitch, level and harmonics of synthetic bass notes, weak fundamental, noise rejection), device profiles and the translation report, target JSON round-trip, EQ-fit error reduction, engine latency/bypass/A-B | **A macOS build** (the CI workflow does this; the code has no platform-specific paths) |
-| Universal (arm64 + x86_64) VST3 + AU build on macOS, zero warnings in Themis' own sources; `auval` AU validation passes; the VST3 loads, instantiates, processes and opens its editor in a JUCE plugin host | Behaviour inside FL Studio's plugin scanner |
-| Headless run of the real processor + editor: audio, parameters, state save/restore incl. custom curve, *Learn from tracks* on a WAV, pass-through is bit-exact, Solo / Mute through `processBlock` (silent side of a mono signal, ignored offline, restored bit for bit), the master plan on the demo programme, resizing | Loading inside FL Studio, automation, whether the Low Crest "typical" zone suits real masters, and whether the generic device profiles and translation limits match real devices and masters |
+| Universal (arm64 + x86_64) VST3 + AU build on macOS, zero warnings in Themis' own sources; `auval` AU validation passes; the VST3 loads, instantiates, processes and opens its editor in a JUCE plugin host | Behaviour inside other hosts' plugin scanners |
+| Headless run of the real processor + editor: audio, parameters, state save/restore incl. custom curve, *Learn from tracks* on a WAV, pass-through is bit-exact, Solo / Mute through `processBlock` (silent side of a mono signal, ignored offline, restored bit for bit), the master plan on the demo programme, resizing | Loading inside real hosts, automation, whether the Low Crest "typical" zone suits real masters, and whether the generic device profiles and translation limits match real devices and masters |
 
 ## Known limitations
 
@@ -140,7 +140,7 @@ tests/                 test_main.cpp (DSP), plugin_smoke.cpp (headless JUCE)
 - **Phase check** is a long-term measurement (it follows the Averaging setting), so a short cancelling passage is diluted by the rest; use the vectorscope's correlation meter for the moment-to-moment view. The delay / polarity diagnosis fits a single inter-channel delay to bands up to 4 kHz and is a model, not proof: a mix of many sources with different offsets reports "other" with the affected range.
 - The analyser's FFT runs on a background thread, not the audio thread: `processBlock` only copies samples into a lock-free ring (a few µs). Two meters are the exception: the Low Crest meter (a few biquads per sample) and the clip meter (a 4× oversampler per channel) run in `processBlock`. If a bounce renders far faster than real time, the worker may skip frames; the long-term average is barely affected.
 - **Clip detection** is a heuristic on the waveform: flat tops are found by their shape (equal samples at a high level), so a synthesised square wave looks like clipping and a clip that was smoothed afterwards does not. True peak is a 4× oversampled estimate, not a certified BS.1770 meter. The limits (−1 / 0 dBTP, any clip) are rules of thumb.
-- No CLAP build yet (FL Studio can load it; add [clap-juce-extensions](https://github.com/free-audio/clap-juce-extensions)).
+- No CLAP build yet.
 - **Licence:** see [Licence](#licence). Building and using Themis yourself is free; if you give a build to somebody else you
   must also give them the source, because JUCE (which Themis is built on) is licensed under the AGPLv3 or a commercial licence.
 
