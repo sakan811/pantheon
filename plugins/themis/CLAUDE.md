@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-Themis (the plugin is called **Themis Verdict**; CMake targets, namespaces and plugin codes keep the short name): a mastering check suite in one plugin (VST3 + AU, Standalone) built on JUCE 8.0.6: tonal balance against a reference curve, device translation, mono fold / phase cancellation, stereo correlation, low-end dynamics (crest), clipping / true peak, bass fundamental, energy over time (bands, mid/side, left/right). Targets macOS plugin hosts (universal arm64 + x86_64, macOS 11+). See [README.md](README.md) for the feature list and the "verified / not verified" table.
+**Themis Verdict** (named after Themis, the Greek titaness of law and fair judgment, and the verdict the checks add up to; CMake targets, namespaces and plugin codes use the short name "Themis"): a mastering check suite in one plugin (VST3 + AU, Standalone) built on JUCE 8.0.6: tonal balance against a reference curve, device translation, mono fold / phase cancellation, stereo correlation, low-end dynamics (crest), clipping / true peak, bass fundamental, energy over time (bands, mid/side, left/right). Targets macOS plugin hosts (universal arm64 + x86_64, macOS 11+). See [README.md](README.md) for the feature list and the "verified / not verified" table.
 
 ## Core principles (apply to every change)
 

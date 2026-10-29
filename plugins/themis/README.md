@@ -1,6 +1,7 @@
 # Themis Verdict
 
-*Themis* is the project, *Verdict* is the plugin: the mastering checks, and the verdict they add up to.
+*Themis* is the Greek titaness of divine law and fair judgment, usually shown holding a pair of scales; *Verdict* is what
+the checks add up to: a plugin that weighs a master and gives its judgment.
 
 Themis Verdict is a **mastering check suite in one plugin** for any VST3 / AU host: tonal balance against a
 reference curve, device translation, mono fold and phase cancellation, stereo correlation, clipping and true peak, low-end dynamics, bass fundamental and energy over time: what you

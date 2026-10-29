@@ -40,5 +40,5 @@ what a statement is about. Themis is **not affiliated with, endorsed by or spons
 - Audio Units, macOS and Apple Silicon are trademarks of Apple Inc.
 - JUCE is a trademark of Raw Material Software Limited.
 
-"Themis" is the name of this project and "Themis Verdict" the name of the plugin. If you publish a fork or a build, give it a name of your own where that could be
+"Themis Verdict" is the name of this plugin ("Themis" for short in the code). If you publish a fork or a build, give it a name of your own where that could be
 confused with another product.
