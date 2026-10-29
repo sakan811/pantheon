@@ -1,36 +1,42 @@
 # Themis Verdict
 
+A **mastering check suite in one plugin** (VST3 + AU) for judging a master: tonal balance, device translation, mono fold and
+phase cancellation, clipping and true peak, loudness, low-end dynamics, bass fundamental and energy over time, summed up in a
+short list of what to do next.
+
+## Name origin
+
 *Themis* is the Greek titaness of divine law and fair judgment, usually shown holding a pair of scales; *Verdict* is what
-the checks add up to: a plugin that weighs a master and gives its judgment.
-
-Themis Verdict is a **mastering check suite in one plugin** for any VST3 / AU host: tonal balance against a
-reference curve, device translation, mono fold and phase cancellation, stereo correlation, clipping and true peak, low-end dynamics, bass fundamental and energy over time: what you
-need to look at before you call a master done.
-
-It is **clean and transparent: for monitoring and decisions only.** It has no EQ, dynamics, limiter or gain stage; the
-audio passes through bit-for-bit unchanged with zero latency, so it is safe to leave on the master bus. The one exception is
-the **Solo / Mute audition**, which changes what you *hear* only while a button is pressed (never saved, never applied to a
-render). Every readout is there to inform a decision you make with your own tools, and the **master plan** turns them all
-into a short list of what to do next.
-
-- **Source only.** This repository contains the code, not a download: to use Themis you build it yourself (see
-  [Build](#build-macos)). It is free software under the **AGPL-3.0-or-later** ([LICENSE](LICENSE), [NOTICE.md](NOTICE.md)),
-  without warranty, and not affiliated with any other product named in these pages.
-- The interface is built like a piece of studio hardware with a digital brain: brushed-metal modules, glass displays with
-  phosphor traces, lamps for every verdict, push switches that light up, rotary knobs with lit scales and a swing-needle
-  correlation meter. It is drawn entirely from code: no image, font or sound files are shipped.
-- Formats: **VST3 + AU** (macOS, universal arm64 + x86_64, macOS 11+), VST3 + Standalone on Linux/Windows if you build there.
-  There is no VST2 build: VST2 is not available for new plugins.
-- Built with [JUCE](https://juce.com) 8. All DSP lives in a dependency-free C++17 core ([core/include/themis](core/include/themis))
-  with its own unit tests.
+the checks add up to: a plugin that weighs a master and gives its judgment. (CMake targets, namespaces and plugin codes use
+the short name "Themis".)
 
 ![Themis Verdict](docs/screenshot.png)
 
-*Headless render of the editor (the hardware-style interface: brushed-metal modules, glass displays, lamps, knobs) measuring a synthetic programme: a four-note bass line over pink noise whose right channel is 0.5 ms late and 1 dB quieter, with a loud "chorus" driven into a hard clipper at -1 dBFS. The **MASTER PLAN** (top right) ranks what to do: stop the clipping, remove the 0.50 ms channel offset (PHASE CHECK reports it and outlines the comb-filter region, about 500 Hz–1.5 kHz, on the mono-fold strip), cut the over-heavy low end, and so on; its HEAR chip on the second item has put SIDE on solo in the **AUDITION** strip (red outline: the output is altered). CLIPPING is red with the clip count, the FUNDAMENTAL readout and graph follow the bass, and the LEVEL graph shows the notes and the louder chorus. The tonal curve looks wild because the demo is not music. Regenerate with the command under "Develop".*
+*Headless render of the editor (the hardware-style interface: brushed-metal modules, glass displays, lamps, knobs) measuring a synthetic programme: a four-note bass line over pink noise whose right channel is 0.5 ms late and 1 dB quieter, with a loud "chorus" driven into a hard clipper at -1 dBFS. The **MASTER PLAN** (top right) ranks what to do: stop the clipping, remove the 0.50 ms channel offset (PHASE CHECK reports it and outlines the comb-filter region, about 500 Hz–1.5 kHz, on the mono-fold strip), cut the over-heavy low end, and so on; its HEAR chip on the second item has put SIDE on solo in the **AUDITION** strip (red outline: the output is altered). CLIPPING is red with the clip count, the FUNDAMENTAL readout and graph follow the bass, and the LEVEL graph shows the notes and the louder chorus. The tonal curve looks wild because the demo is not music. Regenerate with the command under "Development".*
 
 ![Every tab of the LEVEL and FUNDAMENTAL graphs](docs/graphs.png)
 
 *The same programme in every tab of the two graphs: LEVEL (BANDS, MID / SIDE on the LOW range, LEFT / RIGHT, PEAKS with the clipped frames in red) and FUNDAMENTAL (BALANCE, LEVELS, PITCH). Each tab ends in a traffic-light verdict line.*
+
+## Core philosophy
+
+- **Clean and transparent: for monitoring and decisions only.** Themis has no EQ, dynamics, limiter, gain or dither stage; the
+  audio passes through bit-for-bit unchanged with zero latency, so it is safe to leave on the master bus. A feature belongs
+  here if it helps you *judge* a master (a measurement, a verdict, a graph, advice); it does not belong if it *processes* the
+  signal.
+- **One exception, for listening only.** The **Solo / Mute audition** lets you hear what a check flags. It changes the output
+  only while a button is pressed, is bit-exact when idle, is never saved with the session, is ignored when the host renders
+  offline, and runs after every measurement so the analysis always sees the input.
+- **The plugin tells you what to do, from measurements only.** The **master plan** turns the readouts into a short list of
+  changes, worst first, each with an amount and a place computed from a measurement and a *why* behind it. It never invents a
+  number, and it says plainly where a limit is a rule of thumb rather than measured data.
+- **Everything a mastering check needs, in one place.** All checks read the same analysis (one FFT, one band grid) and show up
+  as a readout, a graph or an overlay in a single editor, each with a tooltip that explains the numbers.
+- **Analog look, digital brain.** The interface is a piece of studio hardware: brushed-metal modules, glass displays with
+  phosphor traces, lamps for every verdict, push switches that light up, rotary knobs with lit scales and a swing-needle
+  correlation meter. It is drawn entirely from code: no image, font or sound files are shipped.
+- **Free, public, source only.** The repository holds the code, not a download, under the AGPL-3.0-or-later (see
+  [License](#license) and [Terms of use](#terms-of-use)).
 
 ## Features
 
@@ -52,7 +58,12 @@ into a short list of what to do next.
 > statistics from a reference dataset. Treat them as starting points. For accuracy, use **Learn from tracks** with
 > masters you trust in your genre.
 
-## Build (macOS)
+## How to use
+
+### Build and install (macOS)
+
+Themis is source only: you build it yourself. Formats: **VST3 + AU** (macOS, universal arm64 + x86_64, macOS 11+), VST3 +
+Standalone on Linux/Windows if you build there. There is no VST2 build: VST2 is not available for new plugins.
 
 ```bash
 brew install cmake                    # once (Xcode command line tools required)
@@ -76,12 +87,32 @@ Builds are for your own use. If you hand a build to somebody else, the AGPL requ
 source (see [NOTICE.md](NOTICE.md)); macOS will also quarantine a copy that is not signed with a Developer ID certificate and
 notarised (`xattr -cr "Themis Verdict.vst3"` clears it for personal use).
 
-### Continuous integration
-[.github/workflows/build.yml](.github/workflows/build.yml) builds the universal VST3 + AU on a macOS runner and a VST3 on
-Linux, and runs the DSP tests, on every push. It checks that the code builds and publishes nothing: there are no releases and
-no downloadable binaries, by design.
+### Measuring a master
 
-## Develop
+1. **Put Themis last on the master bus** (after your limiter), so you hear and measure what you are judging. It is pass-through,
+   so it can stay there.
+2. **Choose what to measure against.** Pick a target curve (a built-in one, or **Learn from tracks…** with masters you trust
+   in your genre), **Deliver for** (the loudness target: Streaming -14 LUFS, Loud release -9 LUFS or Dynamic -18 LUFS) and,
+   if you want to preview a playback system, **Translate to** (a device, or Off).
+3. **Press Reset and play the whole track.** The master plan needs at least 20 s of audio, and the longer the better; set
+   Averaging to Infinite for a whole-track measurement. Clipping is judged at once.
+4. **Read the MASTER PLAN.** Items are listed worst first; the headline says what to change and by how much, and hovering it
+   shows why (the numbers behind it and which limit was crossed). The verdict in the corner counts what is left to fix (`READY`
+   when nothing is). Make the change with your own tools, play again and look at the plan once more; fix the biggest item first.
+5. **Listen to what a check flags.** Items with a **HEAR** chip set the Solo / Mute audition for you (click again to stop);
+   you can also set it by hand in the **AUDITION** panel. **CLEAR** releases everything.
+6. **Dig into the readouts and graphs.** The tonal curve, the mono-fold strip, PHASE CHECK, CLIPPING, the LEVEL and FUNDAMENTAL
+   tabs and the vectorscope show the numbers behind the plan; hover any readout, click a legend entry to hide its line.
+7. **Before you export, press CLEAR.** If your host renders in real time (some bounce modes do), it cannot tell, and an engaged
+   audition would end up in the bounce.
+
+
+## Development
+
+Built with [JUCE](https://juce.com) 8. All DSP lives in a dependency-free C++17 core
+([core/include/themis](core/include/themis)) with its own unit tests; the plugin layer only draws and wires it up.
+
+### Tests, screenshots and layout
 
 ```bash
 make test                              # DSP unit tests, no dependencies (g++/clang++ only)
@@ -108,7 +139,12 @@ plugin/Source/         JUCE layer: Parameters, PluginProcessor, PluginEditor, To
 tests/                 test_main.cpp (DSP), plugin_smoke.cpp (headless JUCE)
 ```
 
-## What has and hasn't been verified
+### Continuous integration
+[.github/workflows/build.yml](.github/workflows/build.yml) builds the universal VST3 + AU on a macOS runner and a VST3 on
+Linux, and runs the DSP tests, on every push. It checks that the code builds and publishes nothing: there are no releases and
+no downloadable binaries, by design.
+
+### What has and hasn't been verified
 
 | Verified (Linux aarch64 and macOS arm64, JUCE 8.0.6) | Not yet verified |
 |---|---|
@@ -116,7 +152,7 @@ tests/                 test_main.cpp (DSP), plugin_smoke.cpp (headless JUCE)
 | Universal (arm64 + x86_64) VST3 + AU build on macOS, zero warnings in Themis' own sources; `auval` AU validation passes; the VST3 loads, instantiates, processes and opens its editor in a JUCE plugin host | Behaviour inside other hosts' plugin scanners |
 | Headless run of the real processor + editor: audio, parameters, state save/restore incl. custom curve, *Learn from tracks* on a WAV, pass-through is bit-exact, Solo / Mute through `processBlock` (silent side of a mono signal, ignored offline, restored bit for bit), the master plan on the demo programme, resizing | Loading inside real hosts, automation, whether the Low Crest "typical" zone suits real masters, and whether the generic device profiles and translation limits match real devices and masters |
 
-## Known limitations
+## Limitations
 
 - **Limiter vs full-band noise** (core library only; the plugin has no limiter): the true-peak detector is a 4× interpolator; on music it stays within ~0.1 dB of the
   ceiling, but white noise reaching Nyquist can overshoot by up to ~1 dB (measured: +1.02 dB over a −1 dBTP ceiling, worst of 5 seeds). Leave the −1 dBTP default for streaming masters.
@@ -129,18 +165,25 @@ tests/                 test_main.cpp (DSP), plugin_smoke.cpp (headless JUCE)
 - The analyser's FFT runs on a background thread, not the audio thread: `processBlock` only copies samples into a lock-free ring (a few µs). Four things also run on the audio thread, none of them an FFT: the clip meter (a 4× oversampler per channel, inside the same copy), the Low Crest meter (a few biquads per sample), the loudness meter (K-weighting) and the Solo / Mute audition (which does nothing while idle). If a bounce renders far faster than real time, the worker may skip frames; the long-term average is barely affected.
 - **Clip detection** is a heuristic on the waveform: flat tops are found by their shape (equal samples at a high level), so a synthesised square wave looks like clipping (a clean −6 dBFS square counted hundreds of clips per second of audio) and a clip that was smoothed afterwards does not (the same hard-clipped tone low-passed at 3 kHz counted none). True peak is a 4× oversampled estimate, not a certified BS.1770 meter. The limits (−1 / 0 dBTP, any clip) are rules of thumb.
 - No CLAP build yet.
-- **Licence:** see [Licence](#licence). Building and using Themis yourself is free; if you give a build to somebody else you
-  must also give them the source, because JUCE (which Themis is built on) is licensed under the AGPLv3 or a commercial licence.
 
-## Licence
+## License
 
 Themis is free software, licensed under the **GNU Affero General Public License v3.0 or later** ([LICENSE](LICENSE)). It is
 built on [JUCE](https://juce.com), which is dual-licensed under the AGPLv3 and a commercial licence; Themis uses the AGPLv3
-option, and JUCE is fetched when you configure the build and is not part of this repository. Third-party components, trademarks
-and the "source only" policy are described in [NOTICE.md](NOTICE.md). Contributions are welcome under the same licence
-([CONTRIBUTING.md](CONTRIBUTING.md)).
+option, and JUCE is fetched when you configure the build and is not part of this repository. Third-party components,
+trademarks and the "source only" policy are described in [NOTICE.md](NOTICE.md). Contributions are welcome under the same
+licence ([CONTRIBUTING.md](CONTRIBUTING.md)).
 
-**Disclaimer.** Themis is provided "as is", without warranty of any kind. It measures audio and offers advice based on
-rules of thumb; it does not certify that a master meets any broadcast, streaming or distribution specification, and it does
-not replace listening. Product and company names mentioned here belong to their owners and are used only to describe what
-Themis works with; Themis is not affiliated with or endorsed by any of them.
+## Terms of use
+
+- **Source only.** This repository contains the code, not a download, and publishes no binaries or releases. Building and
+  using Themis yourself is free.
+- **Passing it on.** If you give a build to somebody else, the AGPL requires you to give them the corresponding source
+  (see [NOTICE.md](NOTICE.md)), because JUCE is licensed under the AGPLv3 or a commercial licence. macOS also quarantines a
+  copy that is not signed with a Developer ID certificate and notarised (`xattr -cr "Themis Verdict.vst3"` clears it for
+  personal use).
+- **No warranty.** Themis is provided "as is", without warranty of any kind. It measures audio and offers advice based on
+  rules of thumb; it does not certify that a master meets any broadcast, streaming or distribution specification, and it
+  does not replace listening.
+- **Trademarks.** Product and company names mentioned here belong to their owners and are used only to describe what Themis
+  works with; Themis is not affiliated with or endorsed by any of them.
