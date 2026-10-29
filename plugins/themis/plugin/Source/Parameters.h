@@ -72,13 +72,13 @@ inline const themis::DeviceProfile* deviceForChoice (int choice)
 // is what the big streaming services normalise to. Append only: the index is saved in sessions.
 struct LoudnessTarget
 {
-    const char* name;
+    const char* name;      // the choice text is this plus the value: "Streaming  -14 LUFS"
     const char* shortName; // used in the advice text
     float lufs;
 };
-inline constexpr LoudnessTarget loudnessTargets[] = { { "Streaming  -14 LUFS", "streaming", themis::master::kStreamingLufs },
-                                                      { "Loud release  -9 LUFS", "loud release", -9.0f },
-                                                      { "Dynamic  -18 LUFS", "dynamic", -18.0f } };
+inline constexpr LoudnessTarget loudnessTargets[] = { { "Streaming", "streaming", themis::master::kStreamingLufs },
+                                                      { "Loud release", "loud release", -9.0f },
+                                                      { "Dynamic", "dynamic", -18.0f } };
 inline constexpr int kNumLoudnessTargets = static_cast<int> (sizeof (loudnessTargets) / sizeof (loudnessTargets[0]));
 inline constexpr int kDefaultLoudnessTarget = 0;
 
@@ -86,7 +86,7 @@ inline juce::StringArray loudnessTargetNames()
 {
     juce::StringArray n;
     for (const auto& t : loudnessTargets)
-        n.add (t.name);
+        n.add (juce::String (t.name) + "  " + juce::String (t.lufs, 0) + " LUFS");
     return n;
 }
 
