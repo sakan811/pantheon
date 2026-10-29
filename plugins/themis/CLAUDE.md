@@ -69,4 +69,6 @@ Two layers with a hard dependency direction: `plugin/` → `core/`, never the re
 
 - JUCE is AGPLv3/commercial; distributing builds has licensing implications (README, "Known limitations").
 - The README documents known limiter overshoot on full-band white noise (up to ~1 dB); don't "fix" core tests by loosening ceilings without checking that note.
-- Stereo in/stereo out only; `isBusesLayoutSupported` rejects everything else.
+- Stereo in/stereo out only; `isBusesLayoutSupported` rejects everything else (no test calls it yet).
+- The README "Known limitations" were probed against the code on 2026-10-29: limiter overshoot, clip heuristic, audition crossover slope, fundamental ~20 dB cut-off, phase dilution and frame skipping all hold. One did not: `analysePhase` used to name one dominant `delay` (fit 0.94-1.00) for a mix of sources with different offsets. Fixed with `phasecheck::kMinRunCoherence` (0.85): delay / polarity are only fitted when the mean coherence over the cancelling region is that high, otherwise the cause stays `other`; guarded by `phase_check_does_not_name_one_delay_for_sources_with_different_offsets`. The README text for the phase check follows that limit. The other probes are not in the repo (scratch programs that include `tests/test_main.cpp` with `main` renamed), so add a `TEST` before relying on their numbers.
+- Building a throwaway test program on this Mac needs `SDKROOT` set as in the build-env note, otherwise the link fails with a tapi error on the default SDK.
