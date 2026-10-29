@@ -33,7 +33,8 @@ ThemisEditor::ThemisEditor (ThemisProcessor& p)
     deviceBox.setTooltip ("Preview how the balance would translate to a typical playback device (approximate response; "
                           "analysis only, the audio is never changed). \"Off\" hides the preview.");
     loudnessBox.setTooltip ("The loudness this master is for. The master plan judges the integrated loudness against it: "
-                            "streaming services turn anything louder than -14 LUFS down, so extra loudness there only costs dynamics.");
+                            "streaming services turn anything louder than " + juce::String (static_cast<int> (-themis::master::kStreamingLufs))
+                            + " LUFS down, so extra loudness there only costs dynamics.");
     for (auto* label : { &deviceLabel, &loudnessLabel })
     {
         label->setColour (juce::Label::textColourId, colours::dim);
@@ -197,17 +198,18 @@ void ThemisEditor::paint (juce::Graphics& g)
 
     const auto words = nameplate.reduced (18, 6);
     const auto wordmark = words.withHeight (30);
+    const auto project = juce::String (ui::kProjectWord).toUpperCase();
     g.setFont (ui::wordmarkFont (25.0f));
     g.setColour (juce::Colours::black.withAlpha (0.55f)); // engraved: a shadow above, the lit edge below
-    g.drawText ("THEMIS", wordmark.translated (0, -1), juce::Justification::centred);
+    g.drawText (project, wordmark.translated (0, -1), juce::Justification::centred);
     g.setColour (colours::amber.withAlpha (0.18f));
-    g.drawText ("THEMIS", wordmark.translated (0, 1), juce::Justification::centred);
+    g.drawText (project, wordmark.translated (0, 1), juce::Justification::centred);
     g.setColour (colours::amber);
-    g.drawText ("THEMIS", wordmark, juce::Justification::centred);
+    g.drawText (project, wordmark, juce::Justification::centred);
     g.setColour (colours::text); // the second word, silkscreened between two rules
     g.setFont (ui::labelFont (11.0f).withExtraKerningFactor (0.45f));
     const auto verdict = words.withTrimmedTop (30).withHeight (14);
-    g.drawText ("VERDICT", verdict, juce::Justification::centred);
+    g.drawText (juce::String (ui::kPluginWord).toUpperCase(), verdict, juce::Justification::centred);
     g.setColour (colours::dim.withAlpha (0.5f));
     g.drawHorizontalLine (verdict.getCentreY(), static_cast<float> (verdict.getX()), static_cast<float> (verdict.getCentreX() - 38));
     g.drawHorizontalLine (verdict.getCentreY(), static_cast<float> (verdict.getCentreX() + 38), static_cast<float> (verdict.getRight()));

@@ -194,6 +194,7 @@ int main (int argc, char** argv)
 
     std::printf ("[1] audio passes through untouched, zero latency, curve builds up\n");
     CHECK (proc.getLatencySamples() == 0, "latency=%d", proc.getLatencySamples());
+    CHECK (proc.getName() == juce::String (ui::kProjectWord) + " " + ui::kPluginWord, "name %s", proc.getName().toRawUTF8());
     {
         const size_t n = 512;
         const auto l = pinkNoise (n, 1, 0.5f), r = pinkNoise (n, 2, 0.5f);

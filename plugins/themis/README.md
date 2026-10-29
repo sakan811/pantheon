@@ -53,7 +53,7 @@ into a short list of what to do next.
 
 ## Use with a monitoring-correction plugin
 
-Monitoring-correction plugins (for example Sonarworks SoundID Reference) have no API a third-party plugin can talk to, so
+Monitoring-correction (room or headphone calibration) plugins have no API a third-party plugin can talk to, so
 "pairing" is about signal-chain order and not double-processing. Themis measures only its own input, so as long as the
 correction sits **after** it, calibration never affects the curve, loudness or true-peak readings.
 

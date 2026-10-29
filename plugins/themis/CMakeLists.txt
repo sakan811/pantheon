@@ -44,12 +44,16 @@ if(THEMIS_BUILD_PLUGIN)
         list(APPEND THEMIS_FORMATS AU)
     endif()
 
+    # The plugin's name, written once. JUCE turns PLUGIN_NAME into JucePlugin_Name, which the processor reports to the host;
+    # the smoke test is not a plugin target, so it gets the same value as a definition.
+    set(THEMIS_PLUGIN_NAME "Themis Verdict")
+
     juce_add_plugin(Themis
         COMPANY_NAME                "Themis Audio"
         BUNDLE_ID                   com.themisaudio.themis
-        PRODUCT_NAME                "Themis Verdict"
-        PLUGIN_NAME                 "Themis Verdict"
-        DESCRIPTION                 "Reference-curve tonal balance analyser (audio passes through unchanged)"
+        PRODUCT_NAME                "${THEMIS_PLUGIN_NAME}"
+        PLUGIN_NAME                 "${THEMIS_PLUGIN_NAME}"
+        DESCRIPTION                 "Mastering check suite (audio passes through unchanged)"
         FORMATS                     ${THEMIS_FORMATS}
         IS_SYNTH                    FALSE
         NEEDS_MIDI_INPUT            FALSE
@@ -91,7 +95,7 @@ if(THEMIS_BUILD_PLUGIN)
             plugin/Source/Parameters.cpp
             plugin/Source/PluginProcessor.cpp
             plugin/Source/PluginEditor.cpp)
-        target_compile_definitions(ThemisSmoke PRIVATE JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_MODAL_LOOPS_PERMITTED=1)
+        target_compile_definitions(ThemisSmoke PRIVATE JucePlugin_Name="${THEMIS_PLUGIN_NAME}" JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_MODAL_LOOPS_PERMITTED=1)
         target_link_libraries(ThemisSmoke
             PRIVATE themis_core juce::juce_audio_utils juce::juce_audio_formats
             PUBLIC juce::juce_recommended_config_flags)

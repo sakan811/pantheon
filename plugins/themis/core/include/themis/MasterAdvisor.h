@@ -223,7 +223,7 @@ inline MasterAdvice advise (const MasterInputs& in)
                 out.items.push_back (make (level, Topic::loudness,
                                            format ("Take about %s dB off the limiter's gain: %.1f LUFS against a %.0f LUFS %s target", master::rounded (deltaLu).c_str(),
                                                    static_cast<double> (in.integratedLufs), static_cast<double> (in.targetLufs), in.deliveryName.c_str()),
-                                           std::string (streaming ? format ("Spotify, YouTube and Tidal turn a master louder than %.0f LUFS down, so the extra %.1f dB buys no loudness there and costs punch.",
+                                           std::string (streaming ? format ("Streaming services turn a master louder than %.0f LUFS down, so the extra %.1f dB buys no loudness there and costs punch.",
                                                                             static_cast<double> (master::kStreamingLufs), static_cast<double> (in.integratedLufs - master::kStreamingLufs))
                                                                   : format ("%.1f LU above the target.", static_cast<double> (deltaLu)))
                                                + plrText));

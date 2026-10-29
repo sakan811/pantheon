@@ -2102,7 +2102,7 @@ TEST (advisor_compares_loudness_with_the_delivery_target)
     auto* l = pick (in, Topic::loudness);
     CHECK (l != nullptr && l->level == Level::bad);
     CHECK (l != nullptr && l->headline.rfind ("Take about 6.0 dB off", 0) == 0);
-    CHECK (l != nullptr && l->why.find ("Spotify") != std::string::npos);
+    CHECK (l != nullptr && l->why.find ("Streaming services") != std::string::npos);
 
     in.targetLufs = -9.0f; // a loud release: -8 LUFS is 1 LU over, fine
     in.deliveryName = "Loud";
