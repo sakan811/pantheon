@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 The Themis authors
+
 // Headless smoke test for the JUCE layer: runs the real processor + editor without a host or a display.
 //   ThemisSmoke [snapshot.png [graphs.png]]
 // The optional second image shows every tab of the two history graphs.

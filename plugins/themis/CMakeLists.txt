@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 The Themis authors
+
 cmake_minimum_required(VERSION 3.22)
 
 # These must be set before project(): universal (Apple Silicon + Intel) binaries, macOS 11+.

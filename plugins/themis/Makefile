@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 The Themis authors
+
 # Convenience wrapper for the dependency-free DSP core + tests (no CMake/JUCE needed).
 CXX      ?= g++
 CXXFLAGS ?= -std=c++17 -O2 -Wall -Wextra -Wpedantic -Wconversion -Wno-sign-conversion -Icore/include

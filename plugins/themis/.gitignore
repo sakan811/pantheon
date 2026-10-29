@@ -1,7 +1,29 @@
+# build output
 build/
 build-*/
 cmake-build-*/
+
+# compiled plugins and packaged binaries: this repository is source only, build it yourself
+*.vst3/
+*.component/
+*.app/
+*.dll
+*.dylib
+*.so
+*.zip
+*.dmg
+*.pkg
+
+# editors, OS, local tooling
 .DS_Store
 *.xcodeproj
 .vscode/
 .idea/
+.claude/
+
+# secrets and signing material, never commit these
+.env
+*.p12
+*.pfx
+*.pem
+*.mobileprovision

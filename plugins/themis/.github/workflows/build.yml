@@ -1,11 +1,18 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 The Themis authors
+
 name: build
 
+# This repository is source only: CI checks that the code builds and passes its tests. It never packages, uploads or
+# publishes a compiled plugin (see NOTICE.md).
 on:
   push:
     branches: [main]
-    tags: ['v*']
   pull_request:
   workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   dsp-tests:
@@ -42,20 +49,6 @@ jobs:
         run: |
           killall -9 AudioComponentRegistrar || true
           auval -v aufx Thms Thmi
-      - name: Package
-        run: |
-          mkdir dist
-          ditto -c -k --keepParent ~/Library/Audio/Plug-Ins/VST3/Themis.vst3 dist/Themis-VST3-macOS.zip
-          ditto -c -k --keepParent ~/Library/Audio/Plug-Ins/Components/Themis.component dist/Themis-AU-macOS.zip
-      - uses: actions/upload-artifact@v4
-        with:
-          name: Themis-macOS
-          path: dist/*.zip
-      - name: Release
-        if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
-        with:
-          files: dist/*.zip
 
   linux-plugin-compile:
     # Catches plugin-layer compile errors on every push without needing a Mac.

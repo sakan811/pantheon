@@ -12,6 +12,9 @@ render). Every readout is there to inform a decision you make with your own tool
 into a short list of what to do next.
 
 - Formats: **VST3 + AU** (macOS, universal arm64 + x86_64, macOS 11+), VST3 + Standalone on Linux/Windows if you build there.
+- **Source only.** This repository contains the code, not a download: to use Themis you build it yourself (see
+  [Build](#build-macos)). It is free software under the **AGPL-3.0-or-later** ([LICENSE](LICENSE), [NOTICE.md](NOTICE.md)),
+  without warranty, and not affiliated with any other product named in these pages.
   FL Studio for macOS loads VST3, AU and CLAP; there is no VST2 for new plugins.
 - Built with [JUCE](https://juce.com) 8. All DSP lives in a dependency-free C++17 core ([core/include/themis](core/include/themis))
   with its own unit tests.
@@ -80,9 +83,10 @@ auval -v aufx Thms Thmi               # optional: validate the AU
 To share builds with other people you need an Apple Developer ID certificate + notarisation; otherwise Gatekeeper
 will quarantine downloaded copies (`xattr -cr Themis.vst3` for personal use).
 
-### No Mac handy?
-Push the repo to GitHub: [.github/workflows/build.yml](.github/workflows/build.yml) builds the universal VST3 + AU on a
-macOS runner, runs the DSP tests, and uploads the zips as artifacts (tag `v0.1.0` to publish a release).
+### Continuous integration
+[.github/workflows/build.yml](.github/workflows/build.yml) builds the universal VST3 + AU on a macOS runner and a VST3 on
+Linux, and runs the DSP tests, on every push. It checks that the code builds and publishes nothing: there are no releases and
+no downloadable binaries, by design.
 
 ## Develop
 
@@ -131,5 +135,18 @@ tests/                 test_main.cpp (DSP), plugin_smoke.cpp (headless JUCE)
 - The analyser's FFT runs on a background thread, not the audio thread: `processBlock` only copies samples into a lock-free ring (a few µs). Two meters are the exception: the Low Crest meter (a few biquads per sample) and the clip meter (a 4× oversampler per channel) run in `processBlock`. If a bounce renders far faster than real time, the worker may skip frames; the long-term average is barely affected.
 - **Clip detection** is a heuristic on the waveform: flat tops are found by their shape (equal samples at a high level), so a synthesised square wave looks like clipping and a clip that was smoothed afterwards does not. True peak is a 4× oversampled estimate, not a certified BS.1770 meter. The limits (−1 / 0 dBTP, any clip) are rules of thumb.
 - No CLAP build yet (FL Studio can load it; add [clap-juce-extensions](https://github.com/free-audio/clap-juce-extensions)).
-- **Licence:** JUCE is AGPLv3 / commercial. Personal use is fine; if you distribute Themis you must either open-source it
-  under AGPL or hold a JUCE commercial licence.
+- **Licence:** see [Licence](#licence). Building and using Themis yourself is free; if you give a build to somebody else you
+  must also give them the source, because JUCE (which Themis is built on) is licensed under the AGPLv3 or a commercial licence.
+
+## Licence
+
+Themis is free software, licensed under the **GNU Affero General Public License v3.0 or later** ([LICENSE](LICENSE)). It is
+built on [JUCE](https://juce.com), which is dual-licensed under the AGPLv3 and a commercial licence; Themis uses the AGPLv3
+option, and JUCE is fetched when you configure the build and is not part of this repository. Third-party components, trademarks
+and the "source only" policy are described in [NOTICE.md](NOTICE.md). Contributions are welcome under the same licence
+([CONTRIBUTING.md](CONTRIBUTING.md)).
+
+**Disclaimer.** Themis is provided "as is", without warranty of any kind. It measures audio and offers advice based on
+rules of thumb; it does not certify that a master meets any broadcast, streaming or distribution specification, and it does
+not replace listening. Product and company names mentioned here belong to their owners and are used only to describe what
+Themis works with; Themis is not affiliated with or endorsed by any of them.
