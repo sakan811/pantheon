@@ -49,29 +49,32 @@ public:
     void paint (juce::Graphics& g) override
     {
         auto area = getLocalBounds().toFloat();
-        g.setColour (colours::panel);
-        g.fillRoundedRectangle (area, 8.0f);
+        ui::hw::drawModule (g, area);
         area.reduce (10.0f, 8.0f);
 
         auto titleRow = area.removeFromTop (16.0f);
-        g.setFont (ui::font (11.5f, juce::Font::bold));
-        g.setColour (colours::dim);
-        g.drawText ("MASTER PLAN", titleRow.toNearestInt(), juce::Justification::left);
+        ui::hw::drawLabel (g, "MASTER PLAN", titleRow.toNearestInt());
         const auto [verdict, verdictColour] = verdictText();
+        ui::hw::drawLamp (g, { titleRow.getRight() - 5.0f, titleRow.getCentreY() }, 4.0f, verdictColour, verdictColour != colours::dim);
         g.setColour (verdictColour);
-        g.drawText (verdict, titleRow.toNearestInt(), juce::Justification::right);
+        g.setFont (ui::lcdFont (11.5f, juce::Font::bold));
+        g.drawText (verdict, titleRow.withTrimmedRight (16.0f).toNearestInt(), juce::Justification::right);
 
-        g.setFont (ui::font (11.0f));
-        g.setColour (colours::dim);
-        g.drawText (readoutText(), area.removeFromTop (16.0f).toNearestInt(), juce::Justification::left);
-        area.removeFromTop (4.0f);
+        const auto readout = area.removeFromTop (20.0f);
+        ui::hw::drawGlass (g, readout, 3.0f, colours::amber);
+        g.setFont (ui::lcdFont (11.0f));
+        g.setColour (colours::amber);
+        g.drawText (readoutText(), readout.reduced (7.0f, 0.0f).toNearestInt(), juce::Justification::centredLeft);
+        ui::hw::drawGlassOverlay (g, readout, 3.0f, false);
+        area.removeFromTop (6.0f);
 
         listArea = area.toNearestInt();
         if (advice.items.empty())
         {
-            g.setFont (ui::font (12.0f));
-            g.setColour (advice.measuring ? colours::dim : colours::good);
-            g.drawFittedText (emptyText(), listArea, juce::Justification::topLeft, 6, 1.0f);
+            ui::hw::drawGlass (g, listArea.toFloat().withTrimmedBottom (4.0f), 4.0f, advice.measuring ? colours::amber : colours::good);
+            g.setFont (ui::lcdFont (11.5f));
+            g.setColour (advice.measuring ? colours::amber : colours::good);
+            g.drawFittedText (emptyText(), listArea.reduced (12, 10), juce::Justification::topLeft, 8, 1.0f);
             return;
         }
 
@@ -154,20 +157,19 @@ private:
     {
         row.removeFromBottom (4);
         const auto colour = colours::forLevel (item.level);
-        g.setColour (colours::background.withAlpha (0.55f));
-        g.fillRoundedRectangle (row.toFloat(), 5.0f);
-        g.setColour (colour);
-        g.fillRoundedRectangle (row.removeFromLeft (4).toFloat(), 2.0f);
-        row.reduce (8, 4);
+        ui::hw::drawGlass (g, row.toFloat(), 4.0f, colour);
+        row.reduce (9, 5);
+
+        ui::hw::drawLamp (g, { static_cast<float> (row.getX()) + 5.0f, static_cast<float> (row.getY()) + 7.5f }, 4.5f, colour);
+        row.removeFromLeft (17);
 
         if (item.hear.active())
         {
-            const auto chip = row.removeFromRight (kChipWidth).removeFromTop (16);
+            const auto chip = row.removeFromRight (kChipWidth).removeFromTop (17);
             const bool on = audition == item.hear;
-            g.setColour (on ? colours::warn : colours::panelEdge);
-            g.fillRoundedRectangle (chip.toFloat(), 4.0f);
-            g.setColour (on ? juce::Colours::black : colours::text);
-            g.setFont (ui::font (10.0f, juce::Font::bold));
+            ui::hw::drawPushButton (g, chip.toFloat(), on, colours::amber, false, hoverRow >= 0 && &advice.items[static_cast<size_t> (hoverRow)] == &item);
+            g.setColour (on ? juce::Colour (0xff1c1300) : colours::text);
+            g.setFont (ui::labelFont (9.5f));
             g.drawText (on ? "STOP" : "HEAR", chip, juce::Justification::centred);
             row.removeFromRight (4);
         }

@@ -1,8 +1,9 @@
-# Themis
+# Themis Verdict
 
-Themis is a **mastering check suite in one plugin** for FL Studio (and any VST3 / AU host), in the style of
-**iZotope Tonal Balance Control**: tonal balance against a reference curve, device translation, mono fold and phase
-cancellation, stereo correlation, clipping and true peak, low-end dynamics, bass fundamental and energy over time: what you
+*Themis* is the project, *Verdict* is the plugin: the mastering checks, and the verdict they add up to.
+
+Themis Verdict is a **mastering check suite in one plugin** for FL Studio (and any VST3 / AU host): tonal balance against a
+reference curve, device translation, mono fold and phase cancellation, stereo correlation, clipping and true peak, low-end dynamics, bass fundamental and energy over time: what you
 need to look at before you call a master done.
 
 It is **clean and transparent: for monitoring and decisions only.** It has no EQ, dynamics, limiter or gain stage; the
@@ -11,17 +12,20 @@ the **Solo / Mute audition**, which changes what you *hear* only while a button 
 render). Every readout is there to inform a decision you make with your own tools, and the **master plan** turns them all
 into a short list of what to do next.
 
-- Formats: **VST3 + AU** (macOS, universal arm64 + x86_64, macOS 11+), VST3 + Standalone on Linux/Windows if you build there.
 - **Source only.** This repository contains the code, not a download: to use Themis you build it yourself (see
   [Build](#build-macos)). It is free software under the **AGPL-3.0-or-later** ([LICENSE](LICENSE), [NOTICE.md](NOTICE.md)),
   without warranty, and not affiliated with any other product named in these pages.
+- The interface is built like a piece of studio hardware with a digital brain: brushed-metal modules, glass displays with
+  phosphor traces, lamps for every verdict, push switches that light up, rotary knobs with lit scales and a swing-needle
+  correlation meter. It is drawn entirely from code: no image, font or sound files are shipped.
+- Formats: **VST3 + AU** (macOS, universal arm64 + x86_64, macOS 11+), VST3 + Standalone on Linux/Windows if you build there.
   FL Studio for macOS loads VST3, AU and CLAP; there is no VST2 for new plugins.
 - Built with [JUCE](https://juce.com) 8. All DSP lives in a dependency-free C++17 core ([core/include/themis](core/include/themis))
   with its own unit tests.
 
-![Themis](docs/screenshot.png)
+![Themis Verdict](docs/screenshot.png)
 
-*Headless render of the editor measuring a synthetic programme: a four-note bass line over pink noise whose right channel is 0.5 ms late and 1 dB quieter, with a loud "chorus" driven into a hard clipper at -1 dBFS. The **MASTER PLAN** (top right) ranks what to do: stop the clipping, remove the 0.50 ms channel offset (PHASE CHECK reports it and outlines the comb-filter region, about 500 Hz–1.5 kHz, on the mono-fold strip), cut the over-heavy low end, and so on; its HEAR chip on the second item has put SIDE on solo in the **AUDITION** strip (red outline: the output is altered). CLIPPING is red with the clip count, the FUNDAMENTAL readout and graph follow the bass, and the LEVEL graph shows the notes and the louder chorus. The tonal curve looks wild because the demo is not music. Regenerate with the command under "Develop".*
+*Headless render of the editor (the hardware-style interface: brushed-metal modules, glass displays, lamps, knobs) measuring a synthetic programme: a four-note bass line over pink noise whose right channel is 0.5 ms late and 1 dB quieter, with a loud "chorus" driven into a hard clipper at -1 dBFS. The **MASTER PLAN** (top right) ranks what to do: stop the clipping, remove the 0.50 ms channel offset (PHASE CHECK reports it and outlines the comb-filter region, about 500 Hz–1.5 kHz, on the mono-fold strip), cut the over-heavy low end, and so on; its HEAR chip on the second item has put SIDE on solo in the **AUDITION** strip (red outline: the output is altered). CLIPPING is red with the clip count, the FUNDAMENTAL readout and graph follow the bass, and the LEVEL graph shows the notes and the louder chorus. The tonal curve looks wild because the demo is not music. Regenerate with the command under "Develop".*
 
 ![Every tab of the LEVEL and FUNDAMENTAL graphs](docs/graphs.png)
 
@@ -34,7 +38,7 @@ into a short list of what to do next.
 | **Master plan** | **MASTER PLAN** (top right) reads every measurement below and lists what to do to the master, **worst first**, with the amount and the place: *"Cut about 2.5 dB at 250 Hz - 630 Hz (broad bell)"*, *"Remove the 0.50 ms offset between the channels"*, *"Take about 3 dB off the limiter's gain: -11.2 LUFS against a -14 LUFS target"*, *"Lower the limiter ceiling by 0.6 dB, to -1.0 dBTP"*, *"Make the low end mono: high-pass the side channel around 150 Hz"*, *"Open up the low end: ease the compression on the bass by about 2 dB"*. The headline says what to change and by how much, **hover for why** (the numbers behind it, and which limit was crossed); the verdict in the corner counts what is left to fix (`READY` when nothing is). The tonal moves are the *smallest* EQ move that brings the region back inside the target band (the tooltip also gives the move to the target centre), rounded to the half dB an EQ is set in. Checks: clipping and peak ceiling, loudness against the **Deliver for** target, phase cancellation, low-end mono, mono fold, tonal balance (up to the two biggest out-of-tolerance regions), low-end crest, left/right balance, bass (under 40 Hz, sub-heavy / thin), the low end's steadiness between sections and translation to the selected device. Items that can be listened to have a **HEAR** chip: it sets the Solo / Mute audition (e.g. SIDE + LOW for low-end mono, the flagged range for a tonal move); click again (STOP) to release. It needs audio: press **Reset**, play the whole track (20 s minimum, and the longer the better; set Averaging to Infinite for a whole-track measurement). Clipping is judged at once. All limits are rules of thumb, not measured data, and the plan is only as good as the audio that has played: it is a checklist for your ears and your tools, not a replacement for them. See [MasterAdvisor.h](core/include/themis/MasterAdvisor.h). |
 | **Loudness** | Integrated loudness (ITU-R BS.1770 / EBU R128, K-weighted, gated) since the last Reset, shown under MASTER PLAN with the true peak and the **PLR** (peak-to-loudness ratio, true peak minus integrated LUFS: how much dynamic range the limiter left). **Deliver for** picks the target: *Streaming -14 LUFS* (Spotify, YouTube and Tidal turn a louder master down to about that, so the extra level buys nothing there and costs punch), *Loud release -9 LUFS* or *Dynamic -18 LUFS*. More than 2 LU away from it is a warning, more than 4 LU is bad; too quiet says whether the peak leaves room to raise it by plain gain. The targets and limits are rules of thumb. See [LoudnessMonitor.h](core/include/themis/LoudnessMonitor.h). |
 | **Audition (Solo / Mute)** | **AUDITION** (bottom right) has **S**olo and **M**ute for **MID** (the centre, what a mono sum keeps), **SIDE** (what differs between the channels, what a mono sum loses), **LEFT**, **RIGHT** (a soloed channel plays on both sides) and the four ranges **LOW / LOW-MID / HIGH-MID / HIGH** (the same ranges as the readouts; 4th-order Linkwitz-Riley crossovers at 120 Hz, 1 kHz and 6 kHz). Within each group a solo silences the rest, a mute silences that source; groups combine (SIDE + LOW plays the side signal below 120 Hz, which is exactly the part of the low end a mono playback system throws away). Changes fade over 10 ms. **CLEAR** releases everything; while anything is engaged the panel is outlined red and says OUTPUT ALTERED. **The measurements always see the input**, never the audition, so the curve, the plan and the graphs do not move when you solo. It is the only thing in Themis that changes the output: with nothing pressed the audio is untouched bit for bit, the state is **not saved** with the session or exposed to the host, and it is **ignored while the host renders offline**, so an export cannot carry it. Put Themis last in the chain (or after your limiter) to hear what you are judging. See [Audition.h](core/include/themis/Audition.h). |
-| **Tonal balance curve** | 1/6-octave long-term spectrum (20 Hz–20 kHz) vs a target *median ± tolerance* band. Segments turn green / amber / red as you leave the band. Four broadband readouts (Low / Low-Mid / High-Mid / High) show your average offset from target. A **Low Crest** meter (like TBC's Low End Crest Factor) shows the peak/RMS ratio of the 20–250 Hz band in dB: left = dynamic, right = compressed; its "typical" zone (6–10 dB) is a hand-authored guess. Averaging: 10 s / 30 s / 2 min / infinite; **Reset** restarts it. **The curve does not depend on loudness:** every analysed moment is normalised by its own total energy before averaging (so gain changes, and loud choruses vs quiet verses, don't move it), and near-silent moments are gated relative to the programme level rather than at a fixed dBFS. |
+| **Tonal balance curve** | 1/6-octave long-term spectrum (20 Hz–20 kHz) vs a target *median ± tolerance* band. Segments turn green / amber / red as you leave the band. Four broadband readouts (Low / Low-Mid / High-Mid / High) show your average offset from target. A **Low Crest** meter shows the peak/RMS ratio of the 20–250 Hz band in dB: left = dynamic, right = compressed; its "typical" zone (6–10 dB) is a hand-authored guess. Averaging: 10 s / 30 s / 2 min / infinite; **Reset** restarts it. **The curve does not depend on loudness:** every analysed moment is normalised by its own total energy before averaging (so gain changes, and loud choruses vs quiet verses, don't move it), and near-silent moments are gated relative to the programme level rather than at a fixed dBFS. |
 | **Translation checks** | Analysis-only help for judging how a master will carry over to other playback systems. **Device preview:** pick *Translate to* → Phone speaker / Laptop / Earbuds / Bluetooth speaker / Car / Small monitors (or Off). The curve is redrawn as that device would reproduce it (dashed line) and the range it cannot reach is darkened. **DEVICE LOSS** is how much more level your track loses through the device than the target curve does (so a bass-heavy master reads high on a phone). **Mono fold** is measured per band from the same frames as the tonal curve (level independent): the strip under the curve colours each band green / amber / red by the power lost in a mono sum, and **MONO FOLD**, **LOW-END MONO** (< 150 Hz) and **WORST BAND** summarise it. Hover the readouts for the numbers. The device responses are generic approximations (a bass limit, a treble limit and a few broad bumps), not measurements of any product, and the green/amber/red limits are rules of thumb; both are defined in [Translation.h](core/include/themis/Translation.h). The audio is never filtered. |
 | **Phase-cancellation check** | **PHASE CHECK** catches stereo phase problems that a mono sum would turn into lost level. Per band, the left/right cross-spectrum is averaged like the tonal curve (so it follows the averaging time and is level independent): a band *cancels* when a mono sum loses more than the 3 dB that uncorrelated channels lose. The widest cancelling region is outlined on the mono-fold strip, and the verdict names the likely cause by fitting the inter-channel phase of the coherent bands with a pure model: **Polarity flipped** (one channel inverted), **Delay x ms** (a fixed offset, i.e. comb filtering, with the first notch frequency in the tooltip) or a frequency range when the phase is neither (stereo wideners, phase-shifting effects, a mixed source). Unlike the broadband correlation meter it says *where*, and it still works when the mid signal is silent. See [PhaseCancellation.h](core/include/themis/PhaseCancellation.h). |
 | **Clipping detection** | **CLIPPING** (second readout row) is a true-peak meter since the last **Reset** with the clip count next to it. The audio is checked sample by sample: *sample peak*, *true peak* (4× oversampled inter-sample peak, dBTP), *over* (a sample at or above 0 dBFS) and *clips*, meaning flat tops: at least 4 equal samples in a row above −6 dBFS that the waveform ran into, which a hard clipper or an overdriven limiter leaves at any ceiling, not only at 0 dBFS. Any clip or over is red, a true peak above −1 dBTP is amber (lossy encoding can push it over) and above 0 dBTP red; those limits are rules of thumb. The **PEAKS** tab of the LEVEL graph shows *when* it happened, with the clipped frames as red columns. A synthesised square wave or a held level also looks like a flat top, and a clip that was smoothed afterwards (a soft clipper, a lowpass) leaves none to find. Audio thread cost: about 0.6 % of one core at 48 kHz. See [ClipMeter.h](core/include/themis/ClipMeter.h). |
@@ -72,16 +76,17 @@ The default configuration builds a **universal** binary (arm64 + x86_64) and cop
 `~/Library/Audio/Plug-Ins/VST3` and `~/Library/Audio/Plug-Ins/Components`. JUCE is fetched automatically (needs git + network).
 
 Then in FL Studio: *Options → Manage plugins → Find plugins* (rescan after switching Rosetta/native mode). Themis appears
-under *Fx / Analyzer* (VST3 category) / *Themis Audio* (AU). On Apple Silicon the binary must be signed, ad-hoc is enough for local use:
+under *Fx / Analyzer* (VST3 category) / *Themis Audio* (AU), as "Themis Verdict". On Apple Silicon the binary must be signed, ad-hoc is enough for local use:
 
 ```bash
-codesign --force --deep --sign - ~/Library/Audio/Plug-Ins/VST3/Themis.vst3
-codesign --force --deep --sign - ~/Library/Audio/Plug-Ins/Components/Themis.component
+codesign --force --deep --sign - "$HOME/Library/Audio/Plug-Ins/VST3/Themis Verdict.vst3"
+codesign --force --deep --sign - "$HOME/Library/Audio/Plug-Ins/Components/Themis Verdict.component"
 auval -v aufx Thms Thmi               # optional: validate the AU
 ```
 
-To share builds with other people you need an Apple Developer ID certificate + notarisation; otherwise Gatekeeper
-will quarantine downloaded copies (`xattr -cr Themis.vst3` for personal use).
+Builds are for your own use. If you hand a build to somebody else, the AGPL requires you to give them the corresponding
+source (see [NOTICE.md](NOTICE.md)); macOS will also quarantine a copy that is not signed with a Developer ID certificate and
+notarised (`xattr -cr "Themis Verdict.vst3"` clears it for personal use).
 
 ### Continuous integration
 [.github/workflows/build.yml](.github/workflows/build.yml) builds the universal VST3 + AU on a macOS runner and a VST3 on
@@ -110,7 +115,8 @@ core/include/themis/   DSP: Biquad, Eq, Compressor, Limiter, TruePeak, Loudness,
                        Fundamental, FrameHistory, ClipMeter, HistoryChecks, LoudnessMonitor, MasterAdvisor, Audition, and TruePeak and
                        Loudness underneath them; the rest is a mastering chain kept with its tests)
 plugin/Source/         JUCE layer: Parameters, PluginProcessor, PluginEditor, TonalBalanceView, StereoScopeView, HistoryViews,
-                       AdvicePanel, AuditionPanel
+                       AdvicePanel, AuditionPanel; Hardware.h (the drawing kit of the interface: metal, glass, lamps, knobs),
+                       ThemisLookAndFeel.h, MeterCell.h
 tests/                 test_main.cpp (DSP), plugin_smoke.cpp (headless JUCE)
 ```
 

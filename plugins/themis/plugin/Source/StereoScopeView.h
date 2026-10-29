@@ -3,7 +3,6 @@
 
 #pragma once
 
-#include "MeterCell.h"
 #include "PluginProcessor.h"
 #include "ThemisLookAndFeel.h"
 
@@ -55,15 +54,13 @@ public:
     void paint (juce::Graphics& g) override
     {
         auto area = getLocalBounds().toFloat();
-        g.setColour (colours::panel);
-        g.fillRoundedRectangle (area, 8.0f);
+        ui::hw::drawModule (g, area);
         area.reduce (10.0f, 8.0f);
 
-        g.setColour (colours::dim);
-        g.setFont (ui::font (11.5f, juce::Font::bold));
-        g.drawText ("STEREO", area.removeFromTop (14.0f).toNearestInt(), juce::Justification::left);
+        ui::hw::drawLabel (g, "STEREO", area.removeFromTop (14.0f).toNearestInt());
 
-        const auto meter = area.removeFromBottom (40.0f);
+        const auto meter = area.removeFromBottom (kMeterHeight);
+        area.removeFromBottom (6.0f);
         const float side = std::max (0.0f, std::min (area.getWidth(), area.getHeight()) - 24.0f);
         const auto square = juce::Rectangle<float> (side, side).withCentre (area.getCentre());
         drawScope (g, square);
@@ -78,6 +75,7 @@ public:
 
 private:
     static constexpr int kPoints = 1536;
+    static constexpr float kMeterHeight = 54.0f;
     static constexpr float kPeakRelease = 0.97f;   // per update (~30 Hz): the auto scale relaxes over a few seconds
     static constexpr float kMinRadius = 1.0e-3f;   // -60 dBFS: don't blow noise up to full size
     static constexpr float kFullScaleRadius = 1.41421356f; // full-scale mono
@@ -87,9 +85,13 @@ private:
         const auto c = sq.getCentre();
         const float radius = sq.getWidth() * 0.5f;
 
-        g.setColour (colours::background);
+        g.setColour (juce::Colours::black.withAlpha (0.55f)); // the round bezel the tube sits in
+        g.fillEllipse (sq.expanded (5.0f));
+        g.setGradientFill (juce::ColourGradient (juce::Colour (0xff6b675d), sq.getX(), sq.getY(), juce::Colour (0xff25231f), sq.getRight(), sq.getBottom(), false));
+        g.fillEllipse (sq.expanded (4.0f));
+        g.setGradientFill (juce::ColourGradient (colours::glass.interpolatedWith (colours::accent, 0.07f), c.x, c.y, colours::glass.darker (0.4f), sq.getX(), sq.getY(), true));
         g.fillEllipse (sq);
-        g.setColour (colours::panelEdge);
+        g.setColour (colours::glassGrid.brighter (0.25f));
         g.drawEllipse (sq, 1.0f);
         g.drawEllipse (sq.reduced (radius * 0.5f), 1.0f); // half scale
         g.drawLine (c.x - radius, c.y, c.x + radius, c.y, 1.0f);
@@ -99,60 +101,117 @@ private:
         g.drawLine (c.x - d, c.y + d, c.x + d, c.y - d, 1.0f);
 
         g.setColour (colours::dim);
-        g.setFont (ui::font (11.0f));
+        g.setFont (ui::labelFont (10.0f));
         const auto tag = [&] (const char* text, float x, float y) {
             g.drawText (text, juce::Rectangle<float> (14.0f, 12.0f).withCentre ({ x, y }).toNearestInt(), juce::Justification::centred);
         };
-        tag ("M", c.x, sq.getY() - 6.0f);
-        tag ("L", c.x - d - 6.0f, c.y - d - 6.0f);
-        tag ("R", c.x + d + 6.0f, c.y - d - 6.0f);
-        tag ("S", sq.getRight() + 7.0f, c.y);
+        tag ("M", c.x, sq.getY() - 11.0f);
+        tag ("L", c.x - d - 8.0f, c.y - d - 8.0f);
+        tag ("R", c.x + d + 8.0f, c.y - d - 8.0f);
+        tag ("S", sq.getRight() + 11.0f, c.y);
+        g.setFont (ui::lcdFont (10.0f));
+        g.setColour (colours::amber.withAlpha (0.85f));
         g.drawText (autoScale ? "AUTO" : "0 dBFS", juce::Rectangle<int> (juce::roundToInt (sq.getX()), juce::roundToInt (sq.getBottom()) - 13,
                                                                      juce::roundToInt (sq.getWidth()), 12),
-                    juce::Justification::centredRight);
+                    juce::Justification::centred);
 
-        if (!haveData || numPoints == 0)
-            return;
+        if (haveData && numPoints > 0)
+            drawTrace (g, c, radius);
 
-        // Plot units -> pixels: auto-scale puts the recent peak at the circle's edge, fixed puts full-scale mono there.
+        juce::Path tube;
+        tube.addEllipse (sq);
+        g.saveState();
+        g.reduceClipRegion (tube);
+        g.setGradientFill (juce::ColourGradient (juce::Colours::black.withAlpha (0.0f), c.x, c.y, juce::Colours::black.withAlpha (0.4f), sq.getX(), sq.getY(), true));
+        g.fillEllipse (sq);
+        g.setGradientFill (juce::ColourGradient (juce::Colours::white.withAlpha (0.06f), sq.getX(), sq.getY(), juce::Colours::white.withAlpha (0.0f), c.x, c.y, false));
+        g.fillEllipse (sq);
+        g.restoreState();
+    }
+
+    // The beam: plot units -> pixels, with auto-scale putting the recent peak at the circle's edge and the fixed scale putting
+    // full-scale mono there. Older samples are fainter, and every dot has a glow round it, like a phosphor trace.
+    void drawTrace (juce::Graphics& g, juce::Point<float> c, float radius) const
+    {
         const float reference = autoScale ? std::max (peakRadius, kMinRadius) : kFullScaleRadius;
         const float k = radius * 0.94f / reference;
-        constexpr int kBuckets = 4; // older samples are fainter
-        for (int bucket = 0; bucket < kBuckets; ++bucket)
+        constexpr int kBuckets = 4;
+        for (int pass = 0; pass < 2; ++pass)
         {
-            g.setColour (colours::accent.withAlpha (0.12f + 0.62f * static_cast<float> (bucket) / (kBuckets - 1)));
-            const int from = numPoints * bucket / kBuckets, to = numPoints * (bucket + 1) / kBuckets;
-            for (int i = from; i < to; ++i)
+            const float size = pass == 0 ? 4.2f : 1.6f;
+            for (int bucket = 0; bucket < kBuckets; ++bucket)
             {
-                const auto& p = points[static_cast<size_t> (i)];
-                const float px = juce::jlimit (-radius, radius, p.x * k), py = juce::jlimit (-radius, radius, p.y * k);
-                g.fillRect (c.x + px - 0.8f, c.y - py - 0.8f, 1.6f, 1.6f);
+                const float age = static_cast<float> (bucket) / (kBuckets - 1);
+                g.setColour (colours::accent.withAlpha (pass == 0 ? 0.025f + 0.045f * age : 0.14f + 0.66f * age));
+                const int from = numPoints * bucket / kBuckets, to = numPoints * (bucket + 1) / kBuckets;
+                for (int i = from; i < to; ++i)
+                {
+                    const auto& p = points[static_cast<size_t> (i)];
+                    const float px = juce::jlimit (-radius, radius, p.x * k), py = juce::jlimit (-radius, radius, p.y * k);
+                    g.fillRect (c.x + px - size * 0.5f, c.y - py - size * 0.5f, size, size);
+                }
             }
         }
     }
 
-    // -1 ... +1, like a hardware phase meter: right = mono-compatible, left = phase problems.
+    // -1 ... +1 on a swing-needle panel meter: right = mono-compatible, left = phase problems. The pivot sits far below the glass,
+    // so only the top of the arc shows.
     void drawCorrelation (juce::Graphics& g, juce::Rectangle<float> area) const
     {
         constexpr float kWarnAnti = 0.0f, kBadAnti = 0.3f; // anti-correlation (-correlation) beyond which the verdict worsens
-        const ui::MeterCell cell { area };
-        cell.drawTitle (g, "CORRELATION");
-        const auto bar = cell.drawTrack (g);
-        g.setColour (colours::dim.withAlpha (0.6f));
-        g.drawVerticalLine (juce::roundToInt (bar.getCentreX()), bar.getY() - 1.0f, bar.getBottom() + 1.0f);
+        constexpr float kSweep = 0.62f;                    // radians either side of centre
+        const auto dial = area.reduced (2.0f, 0.0f);
+        ui::hw::drawGlass (g, dial, 4.0f, colours::amber);
 
-        const auto labels = cell.belowBar().toNearestInt();
-        g.setFont (ui::font (11.0f));
+        const float radius = dial.getWidth() * 0.62f;
+        const juce::Point<float> pivot (dial.getCentreX(), dial.getY() + 12.0f + radius);
+        const auto at = [&] (float value, float r) { return pivot + juce::Point<float> (std::sin (value * kSweep), -std::cos (value * kSweep)) * r; };
+
+        g.saveState();
+        g.reduceClipRegion (dial.toNearestInt());
+        const auto zone = [&] (float from, float to, themis::Level level) {
+            juce::Path arc;
+            arc.addCentredArc (pivot.x, pivot.y, radius - 3.0f, radius - 3.0f, 0.0f, from * kSweep, to * kSweep, true);
+            g.setColour (colours::forLevel (level).withAlpha (0.55f));
+            g.strokePath (arc, juce::PathStrokeType (3.0f));
+        };
+        zone (-1.0f, -kBadAnti, themis::Level::bad);
+        zone (-kBadAnti, kWarnAnti, themis::Level::warn);
+        zone (kWarnAnti, 1.0f, themis::Level::good);
+
+        g.setFont (ui::lcdFont (9.5f));
+        for (int i = -4; i <= 4; ++i)
+        {
+            const float v = static_cast<float> (i) * 0.25f;
+            const bool major = i % 2 == 0;
+            g.setColour (colours::dim.withAlpha (major ? 0.9f : 0.5f));
+            g.drawLine ({ at (v, radius - 7.0f), at (v, radius - (major ? 12.0f : 10.0f)) }, 1.0f);
+            if (major)
+            {
+                const auto p = at (v, radius - 20.0f);
+                g.drawText (i == 0 ? "0" : i == 4 ? "+1" : i == 2 ? ".5" : i == -4 ? "-1" : "-.5",
+                            juce::Rectangle<float> (24.0f, 11.0f).withCentre (p).toNearestInt(), juce::Justification::centred);
+            }
+        }
         g.setColour (colours::dim);
-        g.drawText ("-1", labels, juce::Justification::left);
-        g.drawText ("+1", labels, juce::Justification::right);
-        if (!haveData)
-            return;
+        g.setFont (ui::labelFont (8.5f));
+        g.drawText ("CORRELATION", dial.withTrimmedTop (dial.getHeight() - 14.0f).toNearestInt(), juce::Justification::centred);
 
-        const auto c = colours::forLevel (themis::translation::classify (-correlation, kWarnAnti, kBadAnti));
-        ui::MeterCell::drawMarker (g, bar, bar.getX() + bar.getWidth() * (correlation + 1.0f) * 0.5f, c);
-        g.setColour (c);
-        g.drawText (juce::String (correlation, 2), labels, juce::Justification::centred);
+        if (haveData)
+        {
+            const auto level = themis::translation::classify (-correlation, kWarnAnti, kBadAnti);
+            const auto tip = at (juce::jlimit (-1.0f, 1.0f, correlation), radius - 4.0f);
+            const auto base = at (juce::jlimit (-1.0f, 1.0f, correlation), radius - 30.0f);
+            g.setColour (juce::Colours::black.withAlpha (0.6f)); // the needle's shadow
+            g.drawLine ({ base + juce::Point<float> (1.5f, 1.5f), tip + juce::Point<float> (1.5f, 1.5f) }, 2.0f);
+            g.setColour (colours::text);
+            g.drawLine ({ base, tip }, 1.6f);
+            g.setFont (ui::lcdFont (11.0f, juce::Font::bold));
+            g.setColour (colours::forLevel (level));
+            g.drawText (juce::String (correlation, 2), dial.withTrimmedTop (dial.getHeight() - 14.0f).withTrimmedRight (8.0f).toNearestInt(), juce::Justification::centredRight);
+        }
+        g.restoreState();
+        ui::hw::drawGlassOverlay (g, dial, 4.0f, false);
     }
 
     ThemisProcessor& proc;

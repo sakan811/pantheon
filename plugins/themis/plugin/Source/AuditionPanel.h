@@ -51,41 +51,40 @@ public:
     void paint (juce::Graphics& g) override
     {
         auto area = getLocalBounds().toFloat();
-        g.setColour (colours::panel);
-        g.fillRoundedRectangle (area, 8.0f);
+        ui::hw::drawModule (g, area);
         if (active)
         {
-            g.setColour (colours::bad.withAlpha (0.8f));
-            g.drawRoundedRectangle (area.reduced (0.5f), 8.0f, 1.5f);
+            g.setColour (colours::bad.withAlpha (0.20f));
+            g.drawRoundedRectangle (area.reduced (0.5f), 6.0f, 4.0f);
+            g.setColour (colours::bad.withAlpha (0.85f));
+            g.drawRoundedRectangle (area.reduced (0.5f), 6.0f, 1.5f);
         }
 
-        g.setFont (ui::font (11.5f, juce::Font::bold));
-        g.setColour (colours::dim);
-        g.drawText ("AUDITION", titleBounds.withTrimmedRight (60), juce::Justification::centredLeft);
+        ui::hw::drawLabel (g, "AUDITION", titleBounds, juce::Justification::centredLeft);
         if (active)
         {
-            g.setColour (colours::bad);
-            g.setFont (ui::font (10.5f, juce::Font::bold));
-            g.drawText ("OUTPUT ALTERED", titleBounds.withTrimmedRight (62).withTrimmedLeft (66), juce::Justification::centredLeft);
+            ui::hw::drawLamp (g, { static_cast<float> (alertBounds.getX()) + 3.0f, static_cast<float> (alertBounds.getCentreY()) }, 3.0f, colours::bad);
+            ui::hw::drawLabel (g, "OUTPUT ALTERED", alertBounds.withTrimmedLeft (11), juce::Justification::centredLeft, colours::bad, 9.0f);
         }
 
-        g.setFont (ui::font (10.0f, juce::Font::bold));
         for (const auto& group : groups)
         {
-            g.setColour (colours::dim.withAlpha (0.8f));
-            g.drawText (group.name, group.labelBounds, juce::Justification::centredLeft);
+            ui::hw::drawLabel (g, group.name, group.labelBounds.withTrimmedLeft (0), juce::Justification::centredLeft, colours::dim.withAlpha (0.8f), 9.0f);
+            g.setColour (juce::Colours::black.withAlpha (0.45f)); // a groove under the group's name
+            g.drawHorizontalLine (group.labelBounds.getBottom() - 1, static_cast<float> (group.labelBounds.getX() + 56), static_cast<float> (group.labelBounds.getRight()));
         }
-        g.setFont (ui::font (11.5f));
+        g.setFont (ui::labelFont (10.5f));
         g.setColour (colours::text);
         for (int i = 0; i < themis::kNumSources; ++i)
-            g.drawText (themis::sourceName (static_cast<themis::Source> (i)), nameBounds[static_cast<size_t> (i)], juce::Justification::centredLeft);
+            g.drawText (juce::String (themis::sourceName (static_cast<themis::Source> (i))).toUpperCase(), nameBounds[static_cast<size_t> (i)], juce::Justification::centredLeft);
     }
 
     void resized() override
     {
         auto r = getLocalBounds().reduced (10, 6);
         titleBounds = r.removeFromTop (kTitleHeight);
-        clear.setBounds (titleBounds.removeFromRight (54).reduced (0, 1));
+        clear.setBounds (titleBounds.removeFromRight (46).reduced (0, 1));
+        alertBounds = titleBounds.withTrimmedLeft (68);
 
         // Fit the three groups (a label row each, then one row per source) into what is left.
         const int labelRows = 3, sourceRows = themis::kNumSources;
@@ -149,7 +148,7 @@ private:
     std::array<juce::TextButton, themis::kNumSources> solo, mute;
     juce::TextButton clear;
     std::array<juce::Rectangle<int>, themis::kNumSources> nameBounds {};
-    juce::Rectangle<int> titleBounds;
+    juce::Rectangle<int> titleBounds, alertBounds;
     std::array<Group, 3> groups { { { "IMAGE", 2 }, { "CHANNELS", 2 }, { "RANGES", 4 } } };
     bool active = false;
 

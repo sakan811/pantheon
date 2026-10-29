@@ -105,8 +105,9 @@ public:
 
     void paint (juce::Graphics& g) override
     {
-        g.setColour (colours::panel);
-        g.fillRoundedRectangle (getLocalBounds().toFloat(), 8.0f);
+        ui::hw::drawModule (g, getLocalBounds().toFloat());
+        ui::hw::drawGlass (g, verdictRow.reduced (0.0f, 1.0f), 3.0f, colours::amber);
+        ui::hw::drawGlass (g, screen);
 
         const auto& t = tabs[static_cast<size_t> (tab)];
         drawZones (g, t);
@@ -116,6 +117,8 @@ public:
         for (size_t i = 0; i < t.series.size(); ++i)
             if (!isHidden (i))
                 drawSeries (g, t, t.series[i]);
+        ui::hw::drawGlassOverlay (g, screen);
+        ui::hw::drawGlassOverlay (g, verdictRow.reduced (0.0f, 1.0f), 3.0f, false);
         drawHeader (g, t);
         if (numFrames == 0)
         {
@@ -188,7 +191,7 @@ protected:
 private:
     static constexpr double kSpanSeconds = 60.0;
     static constexpr float kLegendWidth = 142.0f;
-    static constexpr float kTitleRow = 18.0f, kLegendRow = 16.0f, kVerdictRow = 28.0f, kAxisLabels = 14.0f;
+    static constexpr float kTitleRow = 20.0f, kLegendRow = 16.0f, kVerdictRow = 32.0f, kAxisLabels = 14.0f;
 
     struct Hit
     {
@@ -214,13 +217,15 @@ private:
         auto row1 = area.removeFromTop (kTitleRow);
         legendRow = area.removeFromTop (kLegendRow);
         verdictRow = area.removeFromTop (kVerdictRow);
-        plot = area.withTrimmedLeft (32.0f).withTrimmedTop (6.0f).withTrimmedBottom (kAxisLabels);
+        area.removeFromTop (3.0f);
+        screen = area;
+        plot = screen.withTrimmedLeft (40.0f).withTrimmedTop (8.0f).withTrimmedBottom (kAxisLabels).withTrimmedRight (26.0f);
 
-        titleArea = row1.removeFromLeft (textWidth (font (11.5f, juce::Font::bold), title) + 12.0f);
-        const auto chipFont = font (11.0f);
+        titleArea = row1.removeFromLeft (textWidth (labelFont(), title.toUpperCase()) + 14.0f);
+        const auto chipFont = labelFont (9.5f);
         for (int i = 0; i < static_cast<int> (tabs.size()); ++i)
         {
-            const auto cell = row1.removeFromLeft (textWidth (chipFont, tabs[static_cast<size_t> (i)].name) + 18.0f);
+            const auto cell = row1.removeFromLeft (textWidth (chipFont, juce::String (tabs[static_cast<size_t> (i)].name).toUpperCase()) + 16.0f);
             hits.push_back ({ Hit::tab, cell.reduced (0.0f, 1.0f), i });
             row1.removeFromLeft (3.0f);
         }
@@ -228,7 +233,7 @@ private:
         if (t.chooseRange)
             for (const int c : { 3, 2, 1, 0, themis::kAllRanges }) // right to left, so ALL ends up first
             {
-                const auto cell = row1.removeFromRight (textWidth (chipFont, themis::energyColumnName (c)) + 14.0f);
+                const auto cell = row1.removeFromRight (textWidth (chipFont, juce::String (themis::energyColumnName (c)).toUpperCase()) + 12.0f);
                 hits.push_back ({ Hit::range, cell.reduced (0.0f, 1.0f), c });
                 row1.removeFromRight (2.0f);
             }
@@ -279,7 +284,7 @@ private:
         for (float v = t.axis.top; v >= t.axis.bottom - 0.01f; v -= t.axis.step)
         {
             const float y = yFor (t.axis, v);
-            g.setColour (colours::panelEdge);
+            g.setColour (colours::glassGrid);
             g.drawHorizontalLine (juce::roundToInt (y), plot.getX(), plot.getRight());
             g.setColour (colours::dim);
             g.drawText (t.axis.tick ? t.axis.tick (v) : juce::String (juce::roundToInt (v)),
@@ -288,11 +293,11 @@ private:
         for (int s = 0; s <= static_cast<int> (kSpanSeconds); s += 20)
         {
             const float x = plot.getRight() - plot.getWidth() * static_cast<float> (s) / static_cast<float> (kSpanSeconds);
-            g.setColour (colours::panelEdge);
+            g.setColour (colours::glassGrid);
             g.drawVerticalLine (juce::roundToInt (x), plot.getY(), plot.getBottom());
             g.setColour (colours::dim);
             g.drawText (s == 0 ? juce::String ("now") : "-" + juce::String (s) + " s",
-                        juce::Rectangle<float> (x - 22.0f, plot.getBottom() + 1.0f, 44.0f, 13.0f).toNearestInt(), juce::Justification::centred);
+                        juce::Rectangle<float> (x - 22.0f, plot.getBottom() + 3.0f, 44.0f, 12.0f).toNearestInt(), juce::Justification::centred);
         }
     }
 
@@ -323,6 +328,11 @@ private:
             pen ? p.lineTo (x, y) : p.startNewSubPath (x, y);
             pen = true;
         }
+        if (!s.dashed)
+        {
+            g.setColour (s.colour.withAlpha (0.14f)); // phosphor glow
+            g.strokePath (p, juce::PathStrokeType (5.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+        }
         g.setColour (s.colour);
         if (s.dashed)
         {
@@ -339,23 +349,15 @@ private:
 
     void drawChip (juce::Graphics& g, juce::Rectangle<float> r, const juce::String& text, bool active) const
     {
-        if (active)
-        {
-            g.setColour (colours::accent.withAlpha (0.2f));
-            g.fillRoundedRectangle (r, 4.0f);
-            g.setColour (colours::accent.withAlpha (0.7f));
-            g.drawRoundedRectangle (r.reduced (0.5f), 4.0f, 1.0f);
-        }
-        g.setFont (font (11.0f, active ? juce::Font::bold : juce::Font::plain));
-        g.setColour (active ? colours::text : colours::dim);
-        g.drawText (text, r.toNearestInt(), juce::Justification::centred);
+        ui::hw::drawPushButton (g, r, active, colours::amber);
+        g.setFont (labelFont (9.5f));
+        g.setColour (active ? juce::Colour (0xff1c1300) : colours::text);
+        g.drawText (text.toUpperCase(), r.toNearestInt(), juce::Justification::centred);
     }
 
     void drawHeader (juce::Graphics& g, const Tab& t) const
     {
-        g.setFont (font (11.5f, juce::Font::bold));
-        g.setColour (colours::dim);
-        g.drawText (title, titleArea.toNearestInt(), juce::Justification::left);
+        hw::drawLabel (g, title, titleArea.toNearestInt());
 
         for (const auto& h : hits)
         {
@@ -366,9 +368,7 @@ private:
         }
         if (t.chooseRange)
         {
-            g.setFont (font (10.5f));
-            g.setColour (colours::dim);
-            g.drawText ("RANGE", rangeLabelArea.toNearestInt(), juce::Justification::right);
+            hw::drawLabel (g, "RANGE", rangeLabelArea.toNearestInt(), juce::Justification::right, colours::dim, 9.0f);
         }
 
         const themis::FrameStats* shown = numFrames > 0 ? &frames[static_cast<size_t> (hoverFrame >= 0 ? hoverFrame : numFrames - 1)] : nullptr;
@@ -402,17 +402,16 @@ private:
         const auto detailArea = right.isEmpty() ? juce::Rectangle<float>() : row.removeFromRight (std::min (190.0f, row.getWidth() * 0.4f));
         if (verdict.text.isNotEmpty())
         {
-            g.setColour (colours::forLevel (verdict.level));
-            g.fillEllipse (juce::Rectangle<float> (7.0f, 7.0f).withCentre ({ row.getX() + 3.5f, row.getY() + 7.0f }));
+            hw::drawLamp (g, { row.getX() + 9.0f, row.getCentreY() }, 3.6f, colours::forLevel (verdict.level));
             g.setColour (colours::text);
-            g.setFont (font (12.0f));
-            g.drawFittedText (verdict.text, row.withTrimmedLeft (14.0f).toNearestInt(), juce::Justification::topLeft, 2, 1.0f);
+            g.setFont (font (11.5f));
+            g.drawFittedText (verdict.text, row.withTrimmedLeft (20.0f).reduced (0.0f, 2.0f).toNearestInt(), juce::Justification::centredLeft, 2, 1.0f);
         }
         else if (numFrames > 0)
         {
             g.setColour (colours::dim);
-            g.setFont (font (12.0f));
-            g.drawText ("Collecting...", row.toNearestInt(), juce::Justification::topLeft);
+            g.setFont (lcdFont (11.5f));
+            g.drawText ("Collecting...", row.withTrimmedLeft (8.0f).toNearestInt(), juce::Justification::centredLeft);
         }
         if (right.isNotEmpty())
         {
@@ -435,7 +434,7 @@ private:
     bool dirty = true;
     uint64_t lastSequence = ~uint64_t (0);
     double period = 0.1;
-    juce::Rectangle<float> plot, titleArea, legendRow, verdictRow, rangeLabelArea;
+    juce::Rectangle<float> plot, screen, titleArea, legendRow, verdictRow, rangeLabelArea;
 };
 
 // Categorical series colours: the first four slots, in order, of a dark-surface palette (blue, orange, aqua, yellow).

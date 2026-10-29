@@ -3,77 +3,96 @@
 
 #pragma once
 
-#include <juce_gui_basics/juce_gui_basics.h>
+#include "Hardware.h"
+
 #include <themis/Common.h>
 #include <themis/Translation.h>
 
-namespace colours
-{
-inline const juce::Colour background { 0xff12141a };
-inline const juce::Colour panel { 0xff1b1e26 };
-inline const juce::Colour panelEdge { 0xff2a2f3a };
-inline const juce::Colour text { 0xffe5e7eb };
-inline const juce::Colour dim { 0xff8b93a1 };
-inline const juce::Colour accent { 0xff2dd4bf };
-inline const juce::Colour good { 0xff4ade80 };
-inline const juce::Colour warn { 0xfff59e0b };
-inline const juce::Colour bad { 0xffef4444 };
-
-// The one mapping from a verdict to its traffic-light colour.
-inline juce::Colour forLevel (themis::Level l)
-{
-    return l == themis::Level::good ? good : l == themis::Level::warn ? warn : bad;
-}
-} // namespace colours
-
 namespace ui
 {
-inline juce::Font font (float height, int styleFlags = juce::Font::plain)
-{
-    return juce::Font (juce::FontOptions (height, styleFlags));
-}
-
 inline juce::String signedDb (float v) { return juce::String (themis::signedDbText (v)); }
 
 inline juce::String hzText (double hz) { return juce::String (themis::hzText (hz)); }
 } // namespace ui
 
+// How every standard component looks: push switches with lamps, knurled knobs, recessed glass selectors.
 class ThemisLookAndFeel : public juce::LookAndFeel_V4
 {
 public:
     ThemisLookAndFeel()
     {
         setColour (juce::ResizableWindow::backgroundColourId, colours::background);
-        setColour (juce::Slider::textBoxTextColourId, colours::text);
+        setColour (juce::Slider::textBoxTextColourId, colours::amber);
         setColour (juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
         setColour (juce::Label::textColourId, colours::text);
-        setColour (juce::ComboBox::backgroundColourId, colours::panelEdge);
-        setColour (juce::ComboBox::textColourId, colours::text);
+        setColour (juce::ComboBox::backgroundColourId, colours::glass);
+        setColour (juce::ComboBox::textColourId, colours::amber);
         setColour (juce::ComboBox::outlineColourId, juce::Colours::transparentBlack);
         setColour (juce::ComboBox::arrowColourId, colours::dim);
-        setColour (juce::PopupMenu::backgroundColourId, colours::panel);
-        setColour (juce::PopupMenu::textColourId, colours::text);
-        setColour (juce::PopupMenu::highlightedBackgroundColourId, colours::accent.darker (0.4f));
+        setColour (juce::PopupMenu::backgroundColourId, colours::glass);
+        setColour (juce::PopupMenu::textColourId, colours::amber);
+        setColour (juce::PopupMenu::headerTextColourId, colours::dim);
+        setColour (juce::PopupMenu::highlightedBackgroundColourId, colours::amber.darker (0.55f));
+        setColour (juce::PopupMenu::highlightedTextColourId, colours::text);
         setColour (juce::TextButton::buttonColourId, colours::panelEdge);
-        setColour (juce::TextButton::buttonOnColourId, colours::accent.darker (0.25f));
+        setColour (juce::TextButton::buttonOnColourId, colours::amber);
         setColour (juce::TextButton::textColourOffId, colours::text);
-        setColour (juce::TextButton::textColourOnId, juce::Colours::white);
+        setColour (juce::TextButton::textColourOnId, juce::Colour (0xff1c1300));
+        setColour (juce::TooltipWindow::backgroundColourId, colours::glass);
+        setColour (juce::TooltipWindow::textColourId, colours::text);
+        setColour (juce::TooltipWindow::outlineColourId, colours::amber.withAlpha (0.45f));
     }
 
+    // ---- push switches --------------------------------------------------------------------------
     void drawButtonBackground (juce::Graphics& g, juce::Button& b, const juce::Colour&, bool highlighted, bool down) override
     {
-        auto r = b.getLocalBounds().toFloat().reduced (0.5f);
-        auto c = b.getToggleState() ? findColour (juce::TextButton::buttonOnColourId) : findColour (juce::TextButton::buttonColourId);
-        if (highlighted)
-            c = c.brighter (0.12f);
-        if (down)
-            c = c.brighter (0.2f);
-        g.setColour (c);
-        g.fillRoundedRectangle (r, 4.0f);
+        ui::hw::drawPushButton (g, b.getLocalBounds().toFloat(), b.getToggleState(), findColour (juce::TextButton::buttonOnColourId), down, highlighted, b.isEnabled());
+    }
+
+    void drawButtonText (juce::Graphics& g, juce::TextButton& b, bool, bool down) override
+    {
+        const auto lit = b.getToggleState();
+        const auto litColour = findColour (juce::TextButton::buttonOnColourId);
+        // dark print on a bright lamp, light print on a dark one
+        const auto on = litColour.getPerceivedBrightness() > 0.5f ? findColour (juce::TextButton::textColourOnId) : colours::text;
+        g.setFont (getTextButtonFont (b, b.getHeight()));
+        g.setColour ((lit ? on : findColour (juce::TextButton::textColourOffId)).withMultipliedAlpha (b.isEnabled() ? 1.0f : 0.45f));
+        g.drawText (b.getButtonText().toUpperCase(), b.getLocalBounds().translated (0, down ? 1 : 0), juce::Justification::centred);
     }
 
     juce::Font getTextButtonFont (juce::TextButton&, int buttonHeight) override
     {
-        return ui::font (juce::jmin (13.0f, static_cast<float> (buttonHeight) * 0.6f));
+        return ui::labelFont (juce::jmin (10.5f, static_cast<float> (buttonHeight) * 0.5f));
+    }
+
+    // ---- knobs ----------------------------------------------------------------------------------
+    void drawRotarySlider (juce::Graphics& g, int x, int y, int width, int height, float position, float startAngle, float endAngle, juce::Slider& s) override
+    {
+        const double steps = s.getInterval() > 0.0 ? (s.getMaximum() - s.getMinimum()) / s.getInterval() : 0.0;
+        const int ticks = steps >= 1.0 && steps <= 11.0 ? static_cast<int> (std::lround (steps)) + 1 : 11; // a detent switch shows its positions
+        ui::hw::drawKnob (g, juce::Rectangle<int> (x, y, width, height).toFloat(), position, startAngle, endAngle, ticks, s.isMouseOverOrDragging());
+    }
+
+    // ---- selectors: a window of glass with the choice written in it ------------------------------
+    void drawComboBox (juce::Graphics& g, int width, int height, bool down, int, int, int, int, juce::ComboBox& box) override
+    {
+        const auto area = juce::Rectangle<float> (0.0f, 0.0f, static_cast<float> (width), static_cast<float> (height)).reduced (1.0f);
+        ui::hw::drawGlass (g, area, 3.0f, colours::amber);
+        const auto c = juce::Point<float> (area.getRight() - 12.0f, area.getCentreY());
+        juce::Path arrows;
+        arrows.addTriangle (c.x - 3.5f, c.y - 1.5f, c.x + 3.5f, c.y - 1.5f, c.x, c.y - 5.0f);
+        arrows.addTriangle (c.x - 3.5f, c.y + 1.5f, c.x + 3.5f, c.y + 1.5f, c.x, c.y + 5.0f);
+        g.setColour (box.isMouseOver() || down ? colours::amber : colours::dim);
+        g.fillPath (arrows);
+        ui::hw::drawGlassOverlay (g, area, 3.0f, false);
+    }
+
+    juce::Font getComboBoxFont (juce::ComboBox&) override { return ui::lcdFont (12.0f); }
+    juce::Font getPopupMenuFont() override { return ui::lcdFont (12.0f); }
+
+    void positionComboBoxText (juce::ComboBox& box, juce::Label& label) override
+    {
+        label.setBounds (6, 1, box.getWidth() - 26, box.getHeight() - 2);
+        label.setFont (getComboBoxFont (box));
     }
 };

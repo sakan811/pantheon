@@ -82,15 +82,16 @@ public:
     void paint (juce::Graphics& g) override
     {
         auto area = getLocalBounds().toFloat();
-        g.setColour (colours::panel);
-        g.fillRoundedRectangle (area, 8.0f);
+        ui::hw::drawModule (g, area);
 
         auto strips = area.removeFromBottom (2.0f * kStripHeight);
         broadbandStrip = strips.removeFromTop (kStripHeight).reduced (8.0f, 4.0f);
         const auto strip = broadbandStrip;
         translationStrip = strips.reduced (8.0f, 4.0f);
-        plot = area.reduced (40.0f, 14.0f).withTrimmedBottom (14.0f);
+        screen = area.reduced (10.0f, 10.0f);
+        plot = screen.reduced (38.0f, 10.0f).withTrimmedBottom (14.0f);
 
+        ui::hw::drawGlass (g, screen);
         drawGrid (g);
         drawDeviceRange (g);
         drawTarget (g);
@@ -107,6 +108,7 @@ public:
             g.drawText ("Play your track - the curve builds up as audio flows through", plot.toNearestInt(), juce::Justification::centred);
         }
         drawPhaseRegion (g);
+        ui::hw::drawGlassOverlay (g, screen);
         drawBroadband (g, strip);
         drawTranslation (g, translationStrip);
         drawHover (g);
@@ -162,11 +164,11 @@ private:
     static bool differs (const T& a, const T& b) { return std::memcmp (&a, &b, sizeof (T)) != 0; }
 
     static constexpr float kTopDb = 12.0f, kBottomDb = -30.0f;
-    static constexpr float kStripHeight = 44.0f;
+    static constexpr float kStripHeight = ui::MeterCell::kStripHeight;
     static constexpr float kFoldStripHeight = 5.0f; // the mono-fold strip along the bottom of the plot (and the phase region outline around it)
 
-    // Display slope in the style of FabFilter Pro-Q's analyzer (4.5 dB/oct). The analysis is constant-Q
-    // band energy, where pink noise (-3 dB/oct power density) is flat, so Pro-Q's 4.5 dB/oct reads as
+    // Display slope of 4.5 dB/oct, a common choice for spectrum analysers. The analysis is constant-Q
+    // band energy, where pink noise (-3 dB/oct power density) is flat, so 4.5 dB/oct reads as
     // +1.5 dB/oct on this grid. Applied identically to signal and target, pivoting at 1 kHz; deltas and
     // colours are unaffected.
     static constexpr float kDisplaySlopeDbPerOct = 4.5f, kPinkSlopeDbPerOct = 3.0f;
@@ -228,7 +230,7 @@ private:
         for (double hz : { 20.0, 50.0, 100.0, 200.0, 500.0, 1000.0, 2000.0, 5000.0, 10000.0, 20000.0 })
         {
             const float x = xFor (hz);
-            g.setColour (colours::panelEdge);
+            g.setColour (colours::glassGrid);
             g.drawVerticalLine (juce::roundToInt (x), plot.getY(), plot.getBottom());
             g.setColour (colours::dim);
             const juce::String label = hz >= 1000.0 ? juce::String (static_cast<int> (hz / 1000.0)) + "k" : juce::String (static_cast<int> (hz));
@@ -238,10 +240,10 @@ private:
         for (float db = kTopDb; db >= kBottomDb - 0.1f; db -= 6.0f)
         {
             const float y = yFor (db);
-            g.setColour (std::abs (db) < 0.01f ? colours::dim.withAlpha (0.5f) : colours::panelEdge);
+            g.setColour (std::abs (db) < 0.01f ? colours::dim.withAlpha (0.5f) : colours::glassGrid);
             g.drawHorizontalLine (juce::roundToInt (y), plot.getX(), plot.getRight());
             g.setColour (colours::dim);
-            g.drawText (juce::String (static_cast<int> (db)), juce::Rectangle<float> (2.0f, y - 7.0f, 34.0f, 14.0f).toNearestInt(),
+            g.drawText (juce::String (static_cast<int> (db)), juce::Rectangle<float> (plot.getX() - 36.0f, y - 7.0f, 32.0f, 14.0f).toNearestInt(),
                         juce::Justification::centredRight);
         }
     }
@@ -258,6 +260,8 @@ private:
         g.strokePath (band, juce::PathStrokeType (1.0f));
 
         traceCurve (median, [&] (size_t s) { return target.medianDb[s]; });
+        g.setColour (colours::accent.withAlpha (0.14f));
+        g.strokePath (median, juce::PathStrokeType (5.0f));
         g.setColour (colours::accent.withAlpha (0.9f));
         g.strokePath (median, juce::PathStrokeType (1.5f));
 
@@ -274,9 +278,13 @@ private:
         for (int i = 0; i < last; ++i)
         {
             const auto s = static_cast<size_t> (i);
-            g.setColour (colours::forLevel (themis::translation::toleranceLevel (sm[s] - target.medianDb[s], target.halfWidthDb[s] * tolerance)));
-            g.drawLine (xFor (themis::BandGrid::centreHz (i)), yFor (sm[s] + tiltDb (i)), xFor (themis::BandGrid::centreHz (i + 1)),
-                        yFor (sm[s + 1] + tiltDb (i + 1)), 2.2f);
+            const auto c = colours::forLevel (themis::translation::toleranceLevel (sm[s] - target.medianDb[s], target.halfWidthDb[s] * tolerance));
+            const juce::Line<float> segment (xFor (themis::BandGrid::centreHz (i)), yFor (sm[s] + tiltDb (i)), xFor (themis::BandGrid::centreHz (i + 1)),
+                                             yFor (sm[s + 1] + tiltDb (i + 1)));
+            g.setColour (c.withAlpha (0.16f)); // phosphor glow
+            g.drawLine (segment, 7.0f);
+            g.setColour (c);
+            g.drawLine (segment, 2.2f);
         }
     }
 
@@ -303,7 +311,10 @@ private:
                 }
             }
             if (n == 0 || !haveData)
+            {
+                cell.drawEmpty (g);
                 continue;
+            }
             delta /= n;
             tol /= n;
 
@@ -318,7 +329,7 @@ private:
         }
     }
 
-    // Crest factor (peak/RMS) of the 20-250 Hz band, laid out like TBC's Low End Crest Factor view: a
+    // Crest factor (peak/RMS) of the 20-250 Hz band: a
     // low-end that is too dynamic sits to the left, one that is too compressed to the right. The
     // "typical" zone is a hand-authored guess, not measured data.
     void drawLowCrest (juce::Graphics& g, const ui::MeterCell& cell) const
@@ -329,7 +340,10 @@ private:
 
         cell.drawTitle (g, "LOW CREST");
         if (!haveCrest)
+        {
+            cell.drawEmpty (g);
             return;
+        }
 
         const auto bar = cell.drawTrack (g);
         const auto xForCrest = [&] (float db) {
@@ -421,7 +435,14 @@ private:
             cell (4).drawNote (g, "PHASE CHECK", "measuring...", colours::dim);
         drawClip (g, cell (5));
         if (!haveData)
+        {
+            for (const auto& [i, title] : { std::pair<int, const char*> { 0, "DEVICE LOSS" }, { 1, "MONO FOLD" }, { 2, "LOW-END MONO" }, { 3, "WORST BAND" } })
+            {
+                cell (i).drawTitle (g, title);
+                cell (i).drawEmpty (g);
+            }
             return;
+        }
 
         if (report.haveDevice)
             drawMeter (g, cell (0), "DEVICE LOSS", report.extraLossDb, tr::kDeviceWarnDb, tr::kDeviceBadDb, report.deviceLevel,
@@ -619,6 +640,6 @@ private:
     float lowCrestDb = 0.0f;
     float tolerance = 1.0f;
     double fs = 48000.0;
-    juce::Rectangle<float> plot;
+    juce::Rectangle<float> plot, screen; // the plot, and the glass window it and its axis labels sit in
     int hoverBand = -1;
 };

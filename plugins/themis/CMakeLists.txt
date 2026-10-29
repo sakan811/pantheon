@@ -47,8 +47,8 @@ if(THEMIS_BUILD_PLUGIN)
     juce_add_plugin(Themis
         COMPANY_NAME                "Themis Audio"
         BUNDLE_ID                   com.themisaudio.themis
-        PRODUCT_NAME                "Themis"
-        PLUGIN_NAME                 "Themis"
+        PRODUCT_NAME                "Themis Verdict"
+        PLUGIN_NAME                 "Themis Verdict"
         DESCRIPTION                 "Reference-curve tonal balance analyser (audio passes through unchanged)"
         FORMATS                     ${THEMIS_FORMATS}
         IS_SYNTH                    FALSE

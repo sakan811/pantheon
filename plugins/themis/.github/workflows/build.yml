@@ -38,12 +38,12 @@ jobs:
         run: cmake --build build --config Release --target Themis_VST3 Themis_AU -j 4
       - name: Check architectures
         run: |
-          lipo -info ~/Library/Audio/Plug-Ins/VST3/Themis.vst3/Contents/MacOS/Themis
-          lipo -info ~/Library/Audio/Plug-Ins/Components/Themis.component/Contents/MacOS/Themis
+          lipo -info "$HOME/Library/Audio/Plug-Ins/VST3/Themis Verdict.vst3/Contents/MacOS/Themis Verdict"
+          lipo -info "$HOME/Library/Audio/Plug-Ins/Components/Themis Verdict.component/Contents/MacOS/Themis Verdict"
       - name: Ad-hoc sign (required on Apple Silicon)
         run: |
-          codesign --force --deep --sign - ~/Library/Audio/Plug-Ins/VST3/Themis.vst3
-          codesign --force --deep --sign - ~/Library/Audio/Plug-Ins/Components/Themis.component
+          codesign --force --deep --sign - "$HOME/Library/Audio/Plug-Ins/VST3/Themis Verdict.vst3"
+          codesign --force --deep --sign - "$HOME/Library/Audio/Plug-Ins/Components/Themis Verdict.component"
       - name: Validate Audio Unit
         continue-on-error: true # auval can be flaky on hosted runners; the result is still logged
         run: |
