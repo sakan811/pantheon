@@ -44,20 +44,20 @@ into a short list of what to do next.
 | **Pass-through** | Nothing is ever written to the audio unless you press Solo / Mute: no EQ, dynamics, limiter or gain stage; reports 0 samples of latency. The plugin exists to measure, not to process. |
 
 > **About the built-in curves.** They are hand-authored approximations of typical mastered material, *not* percentile
-> statistics from a dataset like iZotope's. Treat them as starting points. For accuracy, use **Learn from tracks** with
+> statistics from a reference dataset. Treat them as starting points. For accuracy, use **Learn from tracks** with
 > masters you trust in your genre.
 
-## Use with SoundID Reference (Sonarworks)
+## Use with a monitoring-correction plugin
 
-SoundID Reference has no API a third-party plugin can talk to, so "pairing" is about signal-chain order and not
-double-processing. Themis measures only its own input/output, so as long as SoundID sits **after** it, calibration never
-affects the curve, loudness or true-peak readings.
+Monitoring-correction plugins (for example Sonarworks SoundID Reference) have no API a third-party plugin can talk to, so
+"pairing" is about signal-chain order and not double-processing. Themis measures only its own input, so as long as the
+correction sits **after** it, calibration never affects the curve, loudness or true-peak readings.
 
-1. **Order:** `… → Themis → SoundID Reference` (SoundID last on the master).
-2. **One SoundID mode at a time:** the plugin on the master *or* the Systemwide app — not both. Running both
-   double-corrects; Sonarworks users report big level drops when both are active.
-3. **Never render with SoundID on.** It is for monitoring only. The Systemwide app is the safest route for FL Studio:
-   send FL's output to the SoundID virtual output device and keep SoundID out of the project, so exports are always clean.
+1. **Order:** `… → Themis → correction plugin` (the correction last on the master).
+2. **Use one correction path at a time:** the plugin on the master *or* a system-wide app, not both, or the correction is
+   applied twice.
+3. **Never render with the correction on.** It is for monitoring only. A system-wide app is the safest route for FL Studio:
+   keep the correction out of the project, so exports are always clean.
 4. **Judge balance by the curve as well as by ear.** Calibrated headphones change what you hear, never what Themis measures.
 
 ## Build (macOS)
@@ -129,7 +129,7 @@ tests/                 test_main.cpp (DSP), plugin_smoke.cpp (headless JUCE)
 - Stereo in / stereo out only.
 - **Master plan:** a rule-based checklist, not an oracle. Every threshold (loudness window, crest zone, mono-loss, balance, bass, tonal tolerance) is a hand-authored rule of thumb, and the built-in target curves are approximations; it cannot know your genre, your reference or your intent, so *Deliver for* and the target curve are the two settings that make its advice yours. Tonal moves are relative to the 200 Hz–5 kHz average (a boost in one region can read as cuts elsewhere), so fix the largest item and look again. The amount it suggests is a starting point for your own EQ, limiter and compressor, not a preset. History-based items (balance, bass, low-end steadiness) look at the last ~85 s that played; the rest follow the Averaging setting or the whole time since Reset.
 - **Loudness** is measured on what has played since the last Reset, so a whole-track reading needs the whole track played through (or a bounce), and a loop of the chorus will read like a chorus. It is a BS.1770 implementation tested against the reference sine, not a certified meter.
-- **Audition** is a monitoring aid on the output of the plugin: anything after Themis in the chain (including SoundID Reference) is applied to the soloed signal. Range solos use crossovers, so a soloed range has the crossover slopes at its edges (24 dB/oct), not a brick wall. Solo / Mute is not automatable and not remembered between sessions on purpose; if your host renders in real time (some bounce modes do), it cannot tell, so press CLEAR before you export.
+- **Audition** is a monitoring aid on the output of the plugin: anything after Themis in the chain (including a monitoring-correction plugin) is applied to the soloed signal. Range solos use crossovers, so a soloed range has the crossover slopes at its edges (24 dB/oct), not a brick wall. Solo / Mute is not automatable and not remembered between sessions on purpose; if your host renders in real time (some bounce modes do), it cannot tell, so press CLEAR before you export.
 - **Fundamental tracking** is a spectral heuristic (lowest tonal peak in 30–250 Hz, harmonics counted only where they stand out of the spectrum) tuned and tested on synthetic tones, not on a library of real basses. A fundamental more than ~20 dB under its first harmonic is not told apart from a note that starts at the harmonic; on a full mix the "harmonics" level also contains whatever else sits at those frequencies, so it is most meaningful on a bass or 808 stem or a bass-led passage. The sub-heavy / harmonic-rich limits are rules of thumb.
 - **Phase check** is a long-term measurement (it follows the Averaging setting), so a short cancelling passage is diluted by the rest; use the vectorscope's correlation meter for the moment-to-moment view. The delay / polarity diagnosis fits a single inter-channel delay to bands up to 4 kHz and is a model, not proof: a mix of many sources with different offsets reports "other" with the affected range.
 - The analyser's FFT runs on a background thread, not the audio thread: `processBlock` only copies samples into a lock-free ring (a few µs). Two meters are the exception: the Low Crest meter (a few biquads per sample) and the clip meter (a 4× oversampler per channel) run in `processBlock`. If a bounce renders far faster than real time, the worker may skip frames; the long-term average is barely affected.

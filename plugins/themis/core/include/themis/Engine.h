@@ -55,8 +55,8 @@ struct EngineMeters
 // The full mastering chain:
 //   input -> [taps: input loudness + tonal] -> in gain -> EQ -> glue comp -> width -> limiter -> out gain
 //         -> [taps: output loudness + tonal + true peak + correlation]
-// All taps are read before anything downstream, so a monitoring-correction plugin (e.g. SoundID
-// Reference) placed AFTER this one never influences the measurements.
+// All taps are read before anything downstream, so a monitoring-correction plugin (e.g. a room-correction
+// plugin) placed AFTER this one never influences the measurements.
 class Engine
 {
 public:

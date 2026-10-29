@@ -26,8 +26,7 @@ inline float outsideZoneDb (float crestDb) { return crestDb > kZoneHiDb ? crestD
 inline Level level (float crestDb) { return translation::classify (std::abs (outsideZoneDb (crestDb)), 0.0f, kBadOutsideDb); }
 } // namespace lowcrest
 
-// Low-end crest factor (peak / RMS in dB) of the 20-250 Hz band of a stereo signal (analysed as mid),
-// the same band and quantity as the "Low End Crest Factor" view in iZotope Tonal Balance Control.
+// Low-end crest factor (peak / RMS in dB) of the 20-250 Hz band of a stereo signal (analysed as mid).
 // Low values = a compressed / sustained low end, high values = a punchy / dynamic one.
 //
 // The signal is cut into ~0.4 s windows; each window's crest factor is averaged over time (exponential
