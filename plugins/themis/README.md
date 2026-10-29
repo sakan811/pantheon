@@ -83,9 +83,7 @@ codesign --force --deep --sign - "$HOME/Library/Audio/Plug-Ins/Components/Themis
 auval -v aufx Thms Thmi               # optional: validate the AU
 ```
 
-Builds are for your own use. If you hand a build to somebody else, the AGPL requires you to give them the corresponding
-source (see [NOTICE.md](NOTICE.md)); macOS will also quarantine a copy that is not signed with a Developer ID certificate and
-notarised (`xattr -cr "Themis Verdict.vst3"` clears it for personal use).
+Builds are for your own use; if you hand one to somebody else, see [Terms of use](#terms-of-use).
 
 ### Measuring a master
 
@@ -121,16 +119,17 @@ cmake --build build --target ThemisSmoke
 ./build/ThemisSmoke_artefacts/Release/ThemisSmoke docs/screenshot.png docs/graphs.png   # headless processor+editor run, writes the README images
 ```
 
-Regenerate `docs/screenshot.png` and `docs/graphs.png` after every change that touches the UI or what it shows, and update its caption if the demo
-programme changes (see the principles in [CLAUDE.md](CLAUDE.md)).
+`docs/screenshot.png` and `docs/graphs.png` are the output of that command, never edited by hand. They are regenerated after
+every change that touches the UI or what it shows, and their captions above are kept true to the demo programme (the rules
+for contributors are in [CLAUDE.md](CLAUDE.md)).
 
-Layout:
+Layout (the one file map; update it when a source file is added, renamed or removed):
 
 ```
-core/include/themis/   DSP: Biquad, Eq, Compressor, Limiter, TruePeak, Loudness, StereoTools, FFT,
+core/include/themis/   DSP: Common, Biquad, Eq, Compressor, Limiter, TruePeak, Loudness, StereoTools, FFT,
                        TonalAnalyzer, LowCrestMeter, StereoScope, TargetCurve, Translation, PhaseCancellation,
                        Fundamental, FrameHistory, ClipMeter, HistoryChecks, LoudnessMonitor, MasterAdvisor, Audition, EqFit, Engine
-                       (the plugin uses only TonalAnalyzer, LowCrestMeter, StereoScope, TargetCurve, Translation, PhaseCancellation,
+                       (the plugin uses only Common, TonalAnalyzer, LowCrestMeter, StereoScope, TargetCurve, Translation, PhaseCancellation,
                        Fundamental, FrameHistory, ClipMeter, HistoryChecks, LoudnessMonitor, MasterAdvisor, Audition, and TruePeak and
                        Loudness underneath them; the rest is a mastering chain kept with its tests)
 plugin/Source/         JUCE layer: Parameters, PluginProcessor, PluginEditor, TonalBalanceView, StereoScopeView, HistoryViews,
@@ -148,7 +147,7 @@ no downloadable binaries, by design.
 
 | Verified (Linux aarch64 and macOS arm64, JUCE 8.0.6) | Not yet verified |
 |---|---|
-| 2886 DSP checks: K-weighting vs the ITU coefficient table, −20 LUFS reference sine at 44.1/48/96 kHz, gating, inter-sample true peak, limiter ceiling, compressor curve, M/S EQ targeting, pink/white-noise spectral slopes, low-end crest meter (sine = 3 dB, band limiting, reset, NaN recovery), per-band mono fold (mono 0 dB, uncorrelated −3 dB, inverted → cancels, level independent), per-band phase / coherence, the phase-cancellation verdict (mono, uncorrelated, polarity flip, 0.5 and 1.25 ms delay with its notch frequency, a low-end-only flip), the energy history (calibrated against sines, silence, reset; mid / side / left / right against centred, one-sided and inverted tones), clip detection (a hard clipper at −1 dBFS, clean sines, a 16-bit quantised bass sine that must not count, plateaus across blocks, inter-sample peaks, totals and reset) and the verdicts on the history (swing, width, balance, peaks, bass), the audition (bit-exact when idle, mid / side / left / right against known signals, each range isolated, ranges summing back flat at the crossover corners, fades without clicks), the loudness monitor (the BS.1770 reference sine, reset, loudest section) and the master plan (every item and its numbers, worst first, the tonal move, waiting for enough audio), the bass fundamental estimator (pitch, level and harmonics of synthetic bass notes, weak fundamental, noise rejection), device profiles and the translation report, target JSON round-trip, EQ-fit error reduction, engine latency/bypass/A-B | **A macOS build** (the CI workflow does this; the code has no platform-specific paths) |
+| The DSP checks (`make test` prints the count): K-weighting vs the ITU coefficient table, −20 LUFS reference sine at 44.1/48/96 kHz, gating, inter-sample true peak, limiter ceiling, compressor curve, M/S EQ targeting, pink/white-noise spectral slopes, low-end crest meter (sine = 3 dB, band limiting, reset, NaN recovery), per-band mono fold (mono 0 dB, uncorrelated −3 dB, inverted → cancels, level independent), per-band phase / coherence, the phase-cancellation verdict (mono, uncorrelated, polarity flip, 0.5 and 1.25 ms delay with its notch frequency, a low-end-only flip), the energy history (calibrated against sines, silence, reset; mid / side / left / right against centred, one-sided and inverted tones), clip detection (a hard clipper at −1 dBFS, clean sines, a 16-bit quantised bass sine that must not count, plateaus across blocks, inter-sample peaks, totals and reset) and the verdicts on the history (swing, width, balance, peaks, bass), the audition (bit-exact when idle, mid / side / left / right against known signals, each range isolated, ranges summing back flat at the crossover corners, fades without clicks), the loudness monitor (the BS.1770 reference sine, reset, loudest section) and the master plan (every item and its numbers, worst first, the tonal move, waiting for enough audio), the bass fundamental estimator (pitch, level and harmonics of synthetic bass notes, weak fundamental, noise rejection), device profiles and the translation report, target JSON round-trip, EQ-fit error reduction, engine latency/bypass/A-B | **A macOS build** (the CI workflow does this; the code has no platform-specific paths) |
 | Universal (arm64 + x86_64) VST3 + AU build on macOS, zero warnings in Themis' own sources; `auval` AU validation passes; the VST3 loads, instantiates, processes and opens its editor in a JUCE plugin host | Behaviour inside other hosts' plugin scanners |
 | Headless run of the real processor + editor: audio, parameters, state save/restore incl. custom curve, *Learn from tracks* on a WAV, pass-through is bit-exact, Solo / Mute through `processBlock` (silent side of a mono signal, ignored offline, restored bit for bit), the master plan on the demo programme, resizing | Loading inside real hosts, automation, whether the Low Crest "typical" zone suits real masters, and whether the generic device profiles and translation limits match real devices and masters |
 
@@ -177,7 +176,7 @@ licence ([CONTRIBUTING.md](CONTRIBUTING.md)).
 ## Terms of use
 
 - **Source only.** This repository contains the code, not a download, and publishes no binaries or releases. Building and
-  using Themis yourself is free.
+  using Themis yourself is free (see [NOTICE.md](NOTICE.md) for the policy and the third-party components).
 - **Passing it on.** If you give a build to somebody else, the AGPL requires you to give them the corresponding source
   (see [NOTICE.md](NOTICE.md)), because JUCE is licensed under the AGPLv3 or a commercial licence. macOS also quarantines a
   copy that is not signed with a Developer ID certificate and notarised (`xattr -cr "Themis Verdict.vst3"` clears it for
