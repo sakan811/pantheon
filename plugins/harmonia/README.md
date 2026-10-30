@@ -1,29 +1,40 @@
-# Harmonia
+# Harmonia Pitch
 
-Natural-sounding pitch correction for solo vocals. VST3 + AudioUnit, universal (Apple Silicon + Intel).
+**Natural-sounding pitch correction for solo vocals** (VST3 + AU + Standalone): it snaps the voice to the notes of a key
+while keeping its vibrato, its expression and its colour.
 
-![Harmonia](docs/screenshot.png)
+## Name origin
 
-## Using it in FL Studio
+*Harmonia* is the Greek goddess of harmony and concord, the one who keeps things in accord; *Pitch* is what it keeps in accord: the plugin does that for a sung
+line and the key it is meant to be in. (CMake targets, namespaces and plugin codes use the short name "Harmonia".)
 
-1. Build/install (already done once): `scripts/build.sh`. This copies the plug-ins to
-   `~/Library/Audio/Plug-Ins/VST3/Harmonia.vst3` and `~/Library/Audio/Plug-Ins/Components/Harmonia.component`.
-2. In FL Studio: **Options → Manage plugins → Find installed plugins** (rescan), then
-   add **Harmonia** (the VST3) to the mixer insert of your vocal.
-3. Put it **first** in the insert chain, before reverb/delay/compression.
-4. Set the **key and scale** (or click **Detect key from my vocal**, sing/play a phrase, click again).
-5. Pick a **style**: *Natural* for transparent correction, *Pop* for a polished studio sound, *Hard-tune* for the robotic effect.
+![Harmonia Pitch](docs/screenshot.png)
 
-FL compensates the plug-in's fixed 46 ms latency automatically when mixing. If you monitor through
-Harmonia while recording, you will hear that delay: record dry and add Harmonia afterwards.
+*Headless render of the editor (the hardware-style interface shared with the other plugins) after a phrase of five notes with vibrato in C major. The pitch graph shows the sung pitch (amber) and the corrected pitch (teal) against the allowed notes; the **KEY & SCALE** panel shows the allowed notes as lit piano keys (click one to allow or block it), and the **STYLE** buttons and the six knobs along the bottom (Speed 40 ms, Strength 100 %, Natural 70 %, Note Hold 70 ms, Formant 0, Tuning 440 Hz) set how the correction behaves. **LATENCY** (top) is the fixed 46 ms. Regenerate with the command under "Development".*
 
-## Controls
+## Core philosophy
 
-| Control | What it does |
-| --- | --- |
-| **Key / Scale** | Notes the voice may land on. Click piano keys to allow/block individual notes (switches to *Custom*). |
+- **Natural first.** The voice is pulled onto a note by *Speed* and *Strength*, and *Natural* decides how much of the singer's
+  own deviation (vibrato, expression) is kept. A vibrato stays a vibrato, and a note the voice has settled on is held rather
+  than dragged to its neighbour.
+- **Your voice stays your voice.** Grains are re-spaced, not resampled, so formants stay where they were; consonants and
+  breaths (unvoiced) pass through untouched; *Formant* is zero unless you move it.
+- **One voice at a time.** It is built for a clean solo vocal and says so: not for chords, backing-vocal stacks or full mixes.
+- **A fixed, honest delay.** A 46 ms look-ahead means the pitch track is known before the audio is re-synthesised. The
+  latency is fixed, reported to the host, and kept by Bypass so the original stays aligned.
+- **Analog look, digital brain.** The interface is a piece of studio hardware drawn entirely from code by the kit shared
+  with the other plugins ([shared/ui](../../shared/ui)): no image, font or sound files are shipped.
+- **Free, public, source only.** The repository holds the code, not a download, under the AGPL-3.0-or-later (see
+  [License](#license) and [Terms of use](#terms-of-use)).
+
+## Features
+
+| Area | What it does |
+|---|---|
+| **Key / Scale** | Notes the voice may land on. Click piano keys to allow or block individual notes (switches to *Custom*). Block notes your melody never uses: fewer wrong-note snaps. |
 | **Detect key** | Listens to your vocal and sets key + major/minor for you, once. |
 | **Auto key** | Keeps following the key of the vocal and changes it when the song modulates or a new section starts. Major/minor only; it needs about 6 s of singing before it commits, and takes about 4 s to follow a key change. Key and Scale are ignored while it is on (they still apply until the key is known). Automatable. |
+| **Style** | *Natural* for transparent correction, *Pop* for a polished studio sound, *Hard-tune* for the robotic effect. |
 | **Speed** | How fast the voice is pulled onto the note. *Instant* = robotic. 20–60 ms is transparent. |
 | **Strength** | Amount of correction. 100 % = fully on the note; lower keeps more of your own pitch. |
 | **Natural** | Keeps your own vibrato and expression. 100 % = all of it, 0 % = flattened onto the note. |
@@ -32,19 +43,9 @@ Harmonia while recording, you will hear that delay: record dry and add Harmonia 
 | **Tuning (A4)** | Reference pitch, for songs not tuned to 440 Hz. |
 | **Voice** | Bass/baritone, tenor/alto, soprano or Auto. Narrows the pitch search: faster, never jumps an octave. |
 | **Bypass** | Original vocal, delayed by the latency so it stays aligned. |
+| **Pitch graph** | Your pitch (amber) and the corrected pitch (teal) over the last few seconds against the allowed notes. |
 
-The graph shows your pitch (amber) and the corrected pitch (teal) over the last few seconds against the
-allowed notes.
-
-### Tips for the most natural result
-
-* Use **Natural** style first; raise Speed only if notes still sound off.
-* Choose the **correct key**. Wrong-key notes are the most audible sign of pitch correction.
-* Block notes your melody never uses (click the piano keys): fewer wrong-note snaps.
-* Pick your **Voice** type rather than Auto if the vocal is clean and solo.
-* Works on one voice at a time. Not for chords, backing-vocal stacks or full mixes.
-
-## How it works
+### How it works
 
 `detect (YIN) → pick target note + smooth the correction → PSOLA re-synthesis`
 
@@ -70,18 +71,58 @@ allowed notes.
   only changes when another key has beaten it by a clear margin for 4 s, so passing notes and drift do not move it.
 * A fixed 46 ms look-ahead means the pitch track is known before the audio is re-synthesised.
 
-## Building
+## How to use
 
-Requires CMake and Xcode (clang + macOS SDK). JUCE is fetched automatically (the version is set in `cmake/Juce.cmake` at the repository root).
+### Build and install (macOS)
+
+Harmonia Pitch is source only: you build it yourself. Formats: **VST3 + AU + Standalone** (macOS, universal arm64 + x86_64).
+Requires CMake and Xcode (clang + macOS SDK). JUCE is fetched automatically (the version is set in `cmake/Juce.cmake` at the
+repository root).
 
 ```sh
 scripts/build.sh            # configure, build VST3 + AU + Standalone, install, ad-hoc sign
-scripts/build_tests.sh      # offline DSP accuracy tests (no JUCE) + builds build-tools/{tune_wav,pitch_track,stress_corrector}
 ```
+
+This copies the plug-ins to `~/Library/Audio/Plug-Ins/VST3/Harmonia Pitch.vst3` and
+`~/Library/Audio/Plug-Ins/Components/Harmonia Pitch.component`. Then rescan plugins in your host.
 
 > `scripts/build.sh` drives Xcode's clang/SDK through Unix Makefiles on purpose: on this machine `xcodebuild`
 > cannot start until `sudo xcodebuild -runFirstLaunch` is run, which also breaks CMake's Xcode generator.
 > If you run that once, the stock `cmake -G Xcode` flow works too.
+
+Builds are for your own use; if you hand one to somebody else, see [Terms of use](#terms-of-use).
+
+### Using it in FL Studio
+
+1. In FL Studio: **Options → Manage plugins → Find installed plugins** (rescan), then add **Harmonia Pitch** (the VST3) to the
+   mixer insert of your vocal.
+2. **Put it first** in the insert chain, before reverb/delay/compression.
+3. **Set the key and scale** (or click **Detect key from my vocal**, sing/play a phrase, click again), or turn on **Auto key**.
+4. **Pick a style**: *Natural* for transparent correction, *Pop* for a polished studio sound, *Hard-tune* for the robotic effect.
+5. **Record dry.** FL compensates the plug-in's fixed 46 ms latency automatically when mixing. If you monitor through
+   Harmonia while recording, you will hear that delay: record dry and add Harmonia afterwards.
+
+Tips for the most natural result:
+
+* Use **Natural** style first; raise Speed only if notes still sound off.
+* Choose the **correct key**. Wrong-key notes are the most audible sign of pitch correction.
+* Block notes your melody never uses (click the piano keys): fewer wrong-note snaps.
+* Pick your **Voice** type rather than Auto if the vocal is clean and solo.
+* Works on one voice at a time. Not for chords, backing-vocal stacks or full mixes.
+
+## Development
+
+Built with [JUCE](https://juce.com) 8. The engine in `Source/dsp` is JUCE-free and can be run offline on WAV files; the plugin
+layer only holds the parameters, the host glue and the editor.
+
+### Tests, screenshots and layout
+
+```sh
+scripts/build_tests.sh      # offline DSP accuracy tests (no JUCE) + builds build-tools/{tune_wav,pitch_track,stress_corrector}
+cmake --build build --target HarmoniaDevTool
+build/HarmoniaDevTool_artefacts/Release/HarmoniaDevTool selftest              # headless processor self-test
+build/HarmoniaDevTool_artefacts/Release/HarmoniaDevTool snapshot docs/screenshot.png   # renders the editor to PNG
+```
 
 Extra tools:
 
@@ -100,34 +141,64 @@ build-tools/tune_wav in.wav out.wav --autokey 1
 
 # run a WAV through the real plug-in processor (bit-identical to tune_wav at equal settings)
 build/HarmoniaDevTool_artefacts/Release/HarmoniaDevTool process in.wav out.wav 0 0
-
-# headless processor self-test and editor screenshot
-cmake --build build --target HarmoniaDevTool
-build/HarmoniaDevTool_artefacts/Release/HarmoniaDevTool selftest
-build/HarmoniaDevTool_artefacts/Release/HarmoniaDevTool snapshot ui.png
 ```
 
-## Test results (synthetic voices, 22–192 kHz)
+`docs/screenshot.png` is the output of the `snapshot` command, never edited by hand. It is regenerated after every change
+that touches the UI or what it shows, and its caption above is kept true to the picture.
 
-* Steady notes land within ~0.05 cent of the target; wobble < 1 cent (E2 to C6, two vowels).
-* Vibrato depth kept ≥ 100 % at *Natural 100*, ≤ 15 % at *Natural 0*.
-* Formants unchanged when shifting 3 semitones (spectral centroid ratio 1.04; naive resampling gives 1.19).
-* ~0.8 % of one core (stereo, 48 kHz; ~1.4 % at 96 kHz). Passes `auval` and `pluginval` at strictness 10.
-
-## Layout
+Layout (the one file map; update it when a source file is added, renamed or removed):
 
 ```
 Source/dsp/        JUCE-free engine: Scales, KeyTracker, PitchDetector, PitchCorrector, AutoTuneEngine,
                    Kernels (SIMD-friendly sums), Rings (history buffers)
 Source/            PluginProcessor (parameters, host glue), PluginEditor
 Source/ui/         PitchGraph, NoteKeyboard, HarmoniaUi.h (the two pitch colours); the look itself is shared/ui
+../../shared/ui/   the drawing kit of the interface, shared with the other plugins of the repository
 Tests/             dsp_test, tune_wav, DevTool, synthetic voice generator
 scripts/           build.sh, build_tests.sh, toolchain.sh (shared Xcode clang/SDK lookup)
+docs/screenshot.png  editor render (generated by HarmoniaDevTool)
 ```
+
+### Continuous integration
+
+CI does not build or test Harmonia yet; the workflows in [.github/workflows](../../.github/workflows) cover Themis only (the
+state of that is tracked in the repository's [CLAUDE.md](../../CLAUDE.md)). Run the commands above before you rely on a change.
+
+### What has and hasn't been verified
+
+| Verified (synthetic voices, 22–192 kHz) | Not yet verified |
+|---|---|
+| Steady notes land within ~0.05 cent of the target; wobble < 1 cent (E2 to C6, two vowels) | Windows and Linux builds: the build scripts are macOS-only |
+| Vibrato depth kept ≥ 100 % at *Natural 100*, ≤ 15 % at *Natural 0* | Voices other than a clean solo vocal (see Limitations) |
+| Formants unchanged when shifting 3 semitones (spectral centroid ratio 1.04; naive resampling gives 1.19) | |
+| ~0.8 % of one core (stereo, 48 kHz; ~1.4 % at 96 kHz). Passes `auval` and `pluginval` at strictness 10 | |
+
+## Limitations
+
+- **One voice at a time.** Not for chords, backing-vocal stacks or full mixes.
+- **Fixed 46 ms latency.** FL compensates it when mixing, but if you monitor through Harmonia while recording you will hear
+  it: record dry and add Harmonia afterwards.
+- **Auto key** handles major/minor only, needs about 6 s of singing before it commits and takes about 4 s to follow a key change.
+- **Note Hold delays a real note change** by about the hold time; set it to 0 to switch at once.
+- **A detection more than an octave away** from where the voice just was is treated as a glitch and passes through untouched
+  unless it persists.
 
 ## License
 
-Free software under the **GNU Affero General Public License v3.0 or later** ([LICENSE](../../LICENSE)). It is built on
-[JUCE](https://juce.com) under the AGPLv3 option. This repository is source only: it publishes no binaries. Third-party
-components, trademarks and the build policy are in [NOTICE.md](../../NOTICE.md); how to suggest something is in
-[CONTRIBUTING.md](../../CONTRIBUTING.md) (suggestions are welcome, code contributions are not accepted).
+Harmonia is free software, licensed under the **GNU Affero General Public License v3.0 or later** ([LICENSE](../../LICENSE)). It is
+built on [JUCE](https://juce.com), which is dual-licensed under the AGPLv3 and a commercial licence; Harmonia uses the AGPLv3
+option, and JUCE is fetched when you configure the build and is not part of this repository. Third-party components,
+trademarks and the "source only" policy are described in [NOTICE.md](../../NOTICE.md). Harmonia is maintained by one person:
+suggestions and bug reports are welcome as issues, code contributions are not accepted ([CONTRIBUTING.md](../../CONTRIBUTING.md)).
+
+## Terms of use
+
+- **Source only.** This repository contains the code, not a download, and publishes no binaries; releases are source only. Building and
+  using Harmonia yourself is free (see [NOTICE.md](../../NOTICE.md) for the policy and the third-party components).
+- **Passing it on.** If you give a build to somebody else, the AGPL requires you to give them the corresponding source
+  (see [NOTICE.md](../../NOTICE.md)), because JUCE is licensed under the AGPLv3 or a commercial licence. macOS also quarantines a
+  copy that is not signed with a Developer ID certificate and notarised (`xattr -cr "Harmonia Pitch.vst3"` clears it for personal use).
+- **No warranty.** Harmonia is provided "as is", without warranty of any kind. It is an audio effect: listen to the result
+  and keep your original recording.
+- **Trademarks.** Product and company names mentioned here belong to their owners and are used only to describe what Harmonia
+  works with or what a statement is about; Harmonia is not affiliated with or endorsed by any of them.

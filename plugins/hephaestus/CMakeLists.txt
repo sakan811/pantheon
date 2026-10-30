@@ -21,13 +21,18 @@ add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../../shared/ui ${CMAKE_BINARY_DIR}
 # ---------------------------------------------------------------------------------------
 # Plugin
 # ---------------------------------------------------------------------------------------
+# The plugin's name, written once. JUCE turns PLUGIN_NAME into JucePlugin_Name, which the processor reports to the host;
+# the check targets that compile the processor are not plugin targets, so they get the same value as a definition.
+set(HEPHAESTUS_PLUGIN_NAME "Hephaestus Forge")
+
 juce_add_plugin(Hephaestus
     COMPANY_NAME "Hephaestus Audio"
     BUNDLE_ID com.hephaestusaudio.hephaestus
     PLUGIN_MANUFACTURER_CODE Hpha
     PLUGIN_CODE Hphs
     FORMATS VST3 AU Standalone
-    PRODUCT_NAME "Hephaestus"
+    PRODUCT_NAME "${HEPHAESTUS_PLUGIN_NAME}"
+    PLUGIN_NAME "${HEPHAESTUS_PLUGIN_NAME}"
     VST3_CATEGORIES Fx Distortion
     AU_MAIN_TYPE kAudioUnitType_Effect
     IS_SYNTH FALSE
@@ -97,7 +102,7 @@ set_target_properties(HephaestusHostCheck PROPERTIES EXCLUDE_FROM_ALL TRUE OSX_A
 juce_add_console_app(HephaestusSnapshot PRODUCT_NAME "HephaestusSnapshot")
 target_sources(HephaestusSnapshot PRIVATE Tests/Snapshot.cpp Source/PluginProcessor.cpp Source/PluginEditor.cpp)
 target_include_directories(HephaestusSnapshot PRIVATE Source Tests)
-target_compile_definitions(HephaestusSnapshot PRIVATE JUCE_MODAL_LOOPS_PERMITTED=1 JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0)
+target_compile_definitions(HephaestusSnapshot PRIVATE JucePlugin_Name="${HEPHAESTUS_PLUGIN_NAME}" JUCE_MODAL_LOOPS_PERMITTED=1 JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0)
 target_link_libraries(HephaestusSnapshot
     PRIVATE
         pantheon_ui
@@ -114,7 +119,7 @@ set_target_properties(HephaestusSnapshot PROPERTIES EXCLUDE_FROM_ALL TRUE OSX_AR
 juce_add_console_app(HephaestusUiCheck PRODUCT_NAME "HephaestusUiCheck")
 target_sources(HephaestusUiCheck PRIVATE Tests/UiCheck.cpp Source/PluginProcessor.cpp Source/PluginEditor.cpp)
 target_include_directories(HephaestusUiCheck PRIVATE Source Tests)
-target_compile_definitions(HephaestusUiCheck PRIVATE JUCE_MODAL_LOOPS_PERMITTED=1 JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0)
+target_compile_definitions(HephaestusUiCheck PRIVATE JucePlugin_Name="${HEPHAESTUS_PLUGIN_NAME}" JUCE_MODAL_LOOPS_PERMITTED=1 JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0)
 target_link_libraries(HephaestusUiCheck
     PRIVATE
         pantheon_ui

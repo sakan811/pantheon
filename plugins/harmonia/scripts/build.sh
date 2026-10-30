@@ -29,8 +29,8 @@ cmake --build build --config "$CONFIG" -j "$(sysctl -n hw.ncpu)"
 
 # Ad-hoc sign everything we produced (required for Apple Silicon to load the plug-ins).
 for bundle in \
-    "$HOME/Library/Audio/Plug-Ins/VST3/Harmonia.vst3" \
-    "$HOME/Library/Audio/Plug-Ins/Components/Harmonia.component"; do
+    "$HOME/Library/Audio/Plug-Ins/VST3/Harmonia Pitch.vst3" \
+    "$HOME/Library/Audio/Plug-Ins/Components/Harmonia Pitch.component"; do
     [ -d "$bundle" ] && codesign --force --deep --sign - "$bundle" && echo "signed $bundle"
 done
 echo "Done. Restart FL Studio (or rescan plug-ins) to pick up Harmonia."
