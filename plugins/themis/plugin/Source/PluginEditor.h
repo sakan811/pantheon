@@ -8,7 +8,7 @@
 #include "HistoryViews.h"
 #include "PluginProcessor.h"
 #include "StereoScopeView.h"
-#include "ThemisLookAndFeel.h"
+#include "ThemisUi.h"
 #include "TonalBalanceView.h"
 
 #include <functional>
@@ -105,7 +105,7 @@ private:
     static constexpr int kPlanRefreshTicks = 15; // the plan is re-read twice a second
 
     ThemisProcessor& proc;
-    ThemisLookAndFeel laf;
+    HardwareLookAndFeel laf;
 
     TonalBalanceView view;
     StereoScopeView scopeView;

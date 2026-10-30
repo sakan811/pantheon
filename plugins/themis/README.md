@@ -133,8 +133,9 @@ core/include/themis/   DSP: Common, Biquad, Eq, Compressor, Limiter, TruePeak, L
                        Fundamental, FrameHistory, ClipMeter, HistoryChecks, LoudnessMonitor, MasterAdvisor, Audition, and TruePeak and
                        Loudness underneath them; the rest is a mastering chain kept with its tests)
 plugin/Source/         JUCE layer: Parameters, PluginProcessor, PluginEditor, TonalBalanceView, StereoScopeView, HistoryViews,
-                       AdvicePanel, AuditionPanel; Hardware.h (the drawing kit of the interface: metal, glass, lamps, knobs),
-                       ThemisLookAndFeel.h, MeterCell.h
+                       AdvicePanel, AuditionPanel, ThemisUi.h (Themis' own words, number formats and verdict colours)
+../../shared/ui/       the drawing kit of the interface, shared with the other plugins of the repository: Hardware.h (metal,
+                       glass, lamps, knobs), HardwareLookAndFeel.h, MeterCell.h
 tests/                 test_main.cpp (DSP), plugin_smoke.cpp (headless JUCE)
 ```
 

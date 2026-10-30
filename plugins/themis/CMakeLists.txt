@@ -39,6 +39,11 @@ if(THEMIS_BUILD_PLUGIN)
         GIT_SHALLOW    ON)
     FetchContent_MakeAvailable(JUCE)
 
+    # The interface kit shared by the plugins of this repository (shared/ui), which needs JUCE's GUI module.
+    if(NOT TARGET pantheon_ui)
+        add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../../shared/ui ${CMAKE_BINARY_DIR}/shared/ui)
+    endif()
+
     set(THEMIS_FORMATS VST3 Standalone)
     if(APPLE)
         list(APPEND THEMIS_FORMATS AU)
@@ -81,6 +86,7 @@ if(THEMIS_BUILD_PLUGIN)
     target_link_libraries(Themis
         PRIVATE
             themis_core
+            pantheon_ui
             juce::juce_audio_utils
             juce::juce_audio_formats
         PUBLIC
@@ -97,7 +103,7 @@ if(THEMIS_BUILD_PLUGIN)
             plugin/Source/PluginEditor.cpp)
         target_compile_definitions(ThemisSmoke PRIVATE JucePlugin_Name="${THEMIS_PLUGIN_NAME}" JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_MODAL_LOOPS_PERMITTED=1)
         target_link_libraries(ThemisSmoke
-            PRIVATE themis_core juce::juce_audio_utils juce::juce_audio_formats
+            PRIVATE themis_core pantheon_ui juce::juce_audio_utils juce::juce_audio_formats
             PUBLIC juce::juce_recommended_config_flags)
     endif()
 endif()

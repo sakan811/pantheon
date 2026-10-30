@@ -4,8 +4,7 @@
 #pragma once
 
 #include "PluginProcessor.h"
-#include "MeterCell.h"
-#include "ThemisLookAndFeel.h"
+#include "ThemisUi.h"
 
 #include <themis/HistoryChecks.h>
 #include <themis/LowCrestMeter.h>

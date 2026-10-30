@@ -5,26 +5,11 @@
 
 #include "Hardware.h"
 
-#include <themis/Common.h>
-#include <themis/Translation.h>
-
-namespace ui
-{
-// The two words of the plugin's name. The full name ("Themis Verdict") is set once, in CMakeLists.txt (PLUGIN_NAME), and
-// reaches the code as JucePlugin_Name; the smoke test checks that the two agree.
-inline constexpr const char* kProjectWord = "Themis";
-inline constexpr const char* kPluginWord = "Verdict";
-
-inline juce::String signedDb (float v) { return juce::String (themis::signedDbText (v)); }
-
-inline juce::String hzText (double hz) { return juce::String (themis::hzText (hz)); }
-} // namespace ui
-
 // How every standard component looks: push switches with lamps, knurled knobs, recessed glass selectors.
-class ThemisLookAndFeel : public juce::LookAndFeel_V4
+class HardwareLookAndFeel : public juce::LookAndFeel_V4
 {
 public:
-    ThemisLookAndFeel()
+    HardwareLookAndFeel()
     {
         setColour (juce::ResizableWindow::backgroundColourId, colours::background);
         setColour (juce::Slider::textBoxTextColourId, colours::amber);

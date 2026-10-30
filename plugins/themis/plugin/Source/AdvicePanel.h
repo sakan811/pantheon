@@ -4,7 +4,7 @@
 #pragma once
 
 #include "PluginProcessor.h"
-#include "ThemisLookAndFeel.h"
+#include "ThemisUi.h"
 
 #include <themis/MasterAdvisor.h>
 

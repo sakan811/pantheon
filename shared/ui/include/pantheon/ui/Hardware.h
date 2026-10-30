@@ -4,12 +4,11 @@
 #pragma once
 
 #include <juce_gui_basics/juce_gui_basics.h>
-#include <themis/Translation.h>
 
 #include <algorithm>
 #include <cmath>
 
-// The look of the plugin: a piece of studio hardware with a digital brain. Brushed-metal faceplates with screws, recessed
+// The look of the plugins: a piece of studio hardware with a digital brain. Brushed-metal faceplates with screws, recessed
 // glass windows for everything that is a display, lamps for every verdict, switches that light up. Everything here is
 // drawn from code (no image or font files ship with the plugin), and nothing is random at run time, so the screenshots in
 // docs/ are reproducible.
@@ -30,12 +29,6 @@ inline const juce::Colour warn { 0xfff2a33a };
 inline const juce::Colour bad { 0xffef4a3d };
 inline const juce::Colour glass { 0xff090d0d };        // a display that is off
 inline const juce::Colour glassGrid { 0xff1c2a29 };    // graticule lines on the glass
-
-// The one mapping from a verdict to its lamp colour.
-inline juce::Colour forLevel (themis::Level l)
-{
-    return l == themis::Level::good ? good : l == themis::Level::warn ? warn : bad;
-}
 } // namespace colours
 
 namespace ui

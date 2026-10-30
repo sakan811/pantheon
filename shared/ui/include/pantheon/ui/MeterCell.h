@@ -3,7 +3,7 @@
 
 #pragma once
 
-#include "ThemisLookAndFeel.h"
+#include "Hardware.h"
 
 namespace ui
 {
