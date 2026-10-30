@@ -14,7 +14,8 @@ will pass any delivery specification, and you are responsible for the decisions 
 
 ## This repository is source only
 
-No compiled plugin is published from this repository, and there are no releases. To use Themis, build it yourself (see
+No compiled plugin is published from this repository. Releases (version tags such as v1.0.0, with notes) are source only: the
+source archives GitHub generates for a tag, and no attached binaries. To use Themis, build it yourself (see
 [README.md](README.md), "Build and install"). If you give a build to somebody else, the AGPL applies to you: you must offer them the
 corresponding source code of what you built, including your changes.
 

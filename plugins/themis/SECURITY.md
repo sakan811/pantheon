@@ -21,7 +21,7 @@ upstream), and the audio-quality limits listed in the README's "Limitations".
 
 ## Supported versions
 
-Only the latest commit on `main`; there are no releases.
+Only the latest release and the latest commit on `main`.
 
 ## How the repository is kept safe
 

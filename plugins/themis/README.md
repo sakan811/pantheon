@@ -140,8 +140,8 @@ tests/                 test_main.cpp (DSP), plugin_smoke.cpp (headless JUCE)
 
 ### Continuous integration
 [.github/workflows/build.yml](.github/workflows/build.yml) builds the universal VST3 + AU on a macOS runner and a VST3 on
-Linux, and runs the DSP tests, on every push. It checks that the code builds and publishes nothing: there are no releases and
-no downloadable binaries, by design.
+Linux, and runs the DSP tests, on every push. It checks that the code builds and publishes nothing: no downloadable binaries, by design.
+Releases are version tags made by hand, source only (see [NOTICE.md](NOTICE.md)).
 
 Security checks, all free for a public repository and none of them publishing anything: [codeql.yml](.github/workflows/codeql.yml)
 (CodeQL static analysis of the C++ on every push, pull request and weekly), [dependency-review.yml](.github/workflows/dependency-review.yml)
@@ -182,7 +182,7 @@ suggestions and bug reports are welcome as issues, code contributions are not ac
 
 ## Terms of use
 
-- **Source only.** This repository contains the code, not a download, and publishes no binaries or releases. Building and
+- **Source only.** This repository contains the code, not a download, and publishes no binaries; releases are source only. Building and
   using Themis yourself is free (see [NOTICE.md](NOTICE.md) for the policy and the third-party components).
 - **Passing it on.** If you give a build to somebody else, the AGPL requires you to give them the corresponding source
   (see [NOTICE.md](NOTICE.md)), because JUCE is licensed under the AGPLv3 or a commercial licence. macOS also quarantines a
