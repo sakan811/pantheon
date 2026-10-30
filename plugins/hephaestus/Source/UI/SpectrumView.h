@@ -6,10 +6,10 @@
 #include "../DSP/Engine.h"
 #include "../DSP/SpectrumAnalyzer.h"
 #include "../Parameters.h"
-#include "Look.h"
+#include "HephaestusUi.h"
 #include <juce_gui_basics/juce_gui_basics.h>
 
-namespace hep::ui
+namespace hep::gui
 {
 // Logarithmic frequency axis shared by everything the view draws.
 struct FreqAxis
@@ -24,9 +24,9 @@ struct FreqAxis
     static float toHz (float normalised) noexcept { return minHz * std::pow (maxHz / minHz, normalised); }
 };
 
-// Input (grey) vs output (ember) spectrum, with the user's bands drawn over it. Bands are made and
+// Input (dim) vs output (cream) spectrum, with the user's bands drawn over it. Bands are made and
 // edited here: double-click to add one, drag an edge to resize it, drag its body to move it,
-// right-click for its mode and Remove. Saturate bands are ember, harmonic fill bands cyan.
+// right-click for its mode and Remove. Saturate bands are amber, harmonic fill bands teal.
 //
 // Analysis and defaults follow the analyzer of a typical parametric EQ: 8192-point FFT, fast attack, selectable
 // release, a 90 dB range and a 4.5 dB/oct tilt around 1 kHz. Range, speed and tilt are chosen from
@@ -60,21 +60,21 @@ public:
 
     void paint (juce::Graphics& g) override
     {
-        using namespace colour;
-        g.setColour (juce::Colour (0xff120f0d));
-        g.fillRoundedRectangle (getLocalBounds().toFloat(), 8.0f);
+        const auto window = getLocalBounds().toFloat();
+        ui::hw::drawGlass (g, window, 4.0f, colours::amber);
 
         const auto plot = plotArea();
         g.saveState();
         g.reduceClipRegion (plot.toNearestInt());
         drawGrid (g, plot);
         drawBands (g, plot, false);
-        drawTrace (g, plot, inTrace, trace.withAlpha (0.55f), trace.withAlpha (0.12f));
-        drawTrace (g, plot, outTrace, glow, ember.withAlpha (0.28f));
+        drawTrace (g, plot, inTrace, colours::dim.withAlpha (0.7f), colours::dim.withAlpha (0.14f));
+        drawTrace (g, plot, outTrace, colours::text, colours::text.withAlpha (0.16f));
         drawBands (g, plot, true);
         g.restoreState();
 
         drawAxisLabels (g, plot);
+        ui::hw::drawGlassOverlay (g, window, 4.0f, true);
     }
 
     void mouseMove (const juce::MouseEvent& e) override
@@ -232,12 +232,12 @@ private:
 
     void drawGrid (juce::Graphics& g, juce::Rectangle<float> plot) const
     {
-        g.setColour (colour::panelEdge.withAlpha (0.8f));
+        g.setColour (colours::glassGrid);
         for (float f : { 50.f, 100.f, 200.f, 500.f, 1000.f, 2000.f, 5000.f, 10000.f })
             g.drawVerticalLine ((int) xOf (f, plot), plot.getY(), plot.getBottom());
 
         const float step = rangeDb() > 100.0f ? 20.0f : 10.0f;
-        g.setColour (colour::panelEdge.withAlpha (0.6f));
+        g.setColour (colours::glassGrid);
         for (float db = topDb - step; db > topDb - rangeDb(); db -= step)
             g.drawHorizontalLine ((int) yOf (db, plot), plot.getX(), plot.getRight());
     }
@@ -289,7 +289,6 @@ private:
 
     void drawBands (juce::Graphics& g, juce::Rectangle<float> plot, bool selectedPass) const
     {
-        using namespace colour;
         bool any = false;
         const auto tabs = layoutTabs (plot);
 
@@ -330,14 +329,14 @@ private:
             const auto tab = tabs[(size_t) i];
             g.setColour (isSelected ? tint : tint.withAlpha (0.45f));
             g.fillRoundedRectangle (tab, 3.0f);
-            g.setColour (juce::Colour (0xff120f0d));
+            g.setColour (colours::glass);
             g.setFont (juce::FontOptions (10.0f, juce::Font::bold));
             g.drawText (tabLabel (i), tab, juce::Justification::centred, false);
         }
 
         if (! any && ! selectedPass)
         {
-            g.setColour (dim);
+            g.setColour (colours::dim);
             g.setFont (juce::FontOptions (13.0f));
             g.drawText ("Double-click to add a band", plot.reduced (0.0f, 40.0f), juce::Justification::centred);
         }
@@ -384,7 +383,7 @@ private:
         glyphs.addLineOfText (juce::Font (font), text, 0.0f, 0.0f);
         const float textWidth = glyphs.getBoundingBox (0, -1, true).getWidth() + 10.0f;
         const auto pill = juce::Rectangle<float> (textWidth, 12.0f).withCentre ({ 0.5f * (x0 + x1), y - 10.0f });
-        g.setColour (juce::Colour (0xff120f0d).withAlpha (0.8f));
+        g.setColour (colours::glass.withAlpha (0.8f));
         g.fillRoundedRectangle (pill, 3.0f);
         g.setColour (line);
         g.setFont (juce::Font (font));
@@ -394,7 +393,7 @@ private:
     void drawAxisLabels (juce::Graphics& g, juce::Rectangle<float> plot) const
     {
         g.setFont (juce::FontOptions (10.0f));
-        g.setColour (colour::dim);
+        g.setColour (colours::dim);
 
         for (float f : { 20.f, 50.f, 100.f, 200.f, 500.f, 1000.f, 2000.f, 5000.f, 10000.f, 20000.f })
         {
@@ -407,9 +406,9 @@ private:
         for (float db = topDb - step; db > topDb - rangeDb(); db -= step)
             g.drawText (juce::String ((int) db), (int) plot.getRight() - 30, (int) yOf (db, plot) - 12, 26, 12, juce::Justification::right);
 
-        g.setColour (colour::trace);
+        g.setColour (colours::dim);
         g.drawText ("INPUT", (int) plot.getRight() - 170, (int) plot.getY() + 4, 60, 12, juce::Justification::right);
-        g.setColour (colour::glow);
+        g.setColour (colours::text);
         g.drawText ("OUTPUT", (int) plot.getRight() - 100, (int) plot.getY() + 4, 70, 12, juce::Justification::right);
     }
 

@@ -15,6 +15,9 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # JUCE is not vendored: cmake/Juce.cmake fetches it (and owns the version).
 include(${CMAKE_CURRENT_SOURCE_DIR}/../../cmake/Juce.cmake) # JUCE, one version for the repository
 
+# The interface kit shared by the plugins of this repository (shared/ui).
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../../shared/ui ${CMAKE_BINARY_DIR}/shared/ui)
+
 # ---------------------------------------------------------------------------------------
 # Plugin
 # ---------------------------------------------------------------------------------------
@@ -43,6 +46,7 @@ target_compile_definitions(Hephaestus PUBLIC
 
 target_link_libraries(Hephaestus
     PRIVATE
+        pantheon_ui
         juce::juce_audio_utils
         juce::juce_dsp
     PUBLIC
@@ -96,6 +100,7 @@ target_include_directories(HephaestusSnapshot PRIVATE Source Tests)
 target_compile_definitions(HephaestusSnapshot PRIVATE JUCE_MODAL_LOOPS_PERMITTED=1 JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0)
 target_link_libraries(HephaestusSnapshot
     PRIVATE
+        pantheon_ui
         juce::juce_audio_utils
         juce::juce_dsp
     PUBLIC
@@ -112,6 +117,7 @@ target_include_directories(HephaestusUiCheck PRIVATE Source Tests)
 target_compile_definitions(HephaestusUiCheck PRIVATE JUCE_MODAL_LOOPS_PERMITTED=1 JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0)
 target_link_libraries(HephaestusUiCheck
     PRIVATE
+        pantheon_ui
         juce::juce_audio_utils
         juce::juce_dsp
     PUBLIC

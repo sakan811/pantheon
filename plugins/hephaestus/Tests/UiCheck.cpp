@@ -22,7 +22,7 @@ constexpr int viewWidth = 1008, viewHeight = 224;
 // The view's plot is its bounds inset by 6 px on every side (see SpectrumView::plotArea).
 float xOf (double hz)
 {
-    return 6.0f + ui::FreqAxis::toNormalised ((float) hz) * (float) (viewWidth - 12);
+    return 6.0f + gui::FreqAxis::toNormalised ((float) hz) * (float) (viewWidth - 12);
 }
 
 float value (HephaestusProcessor& p, const juce::String& id) { return p.apvts.getRawParameterValue (id)->load(); }
@@ -53,7 +53,7 @@ int main()
     proc.setPlayConfigDetails (2, 2, 48000.0, 512);
     proc.prepareToPlay (48000.0, 512);
 
-    ui::SpectrumView view (proc.engine, proc.apvts, proc.currentSampleRate);
+    gui::SpectrumView view (proc.engine, proc.apvts, proc.currentSampleRate);
     view.setBounds (0, 0, viewWidth, viewHeight);
 
     std::printf ("\nBand slots\n");

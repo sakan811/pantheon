@@ -4,12 +4,14 @@
 #include "PluginEditor.h"
 
 using namespace hep;
-using namespace hep::ui;
+using namespace hep::gui;
 
 namespace
 {
-constexpr int editorWidth = 1040, editorHeight = 582;
-constexpr int cellHeight = 98, captionHeight = 14;
+constexpr int editorWidth = 1040, editorHeight = 624;
+constexpr int headerHeight = 84;   // the control panel along the top
+constexpr int cellHeight = 104;    // a knob: name, knob, read-out
+constexpr int panelRowHeight = 284;
 constexpr int chipWidth = 34, chipHeight = 26, chipGap = 6;
 
 // Everything that varies between the fixed panels, in one place.
@@ -24,7 +26,7 @@ struct PanelSpec
 
 const PanelSpec panelSpecs[] =
 {
-    { "BAND",      "",                                 6, 0, 110 },
+    { "BAND",      "",                                 6, 0, 126 },
     { "CHARACTER", "shared by all saturate bands",     2, 1, 26 },
     { "MASTER",    "",                                 3, 0, 26 },
 };
@@ -87,9 +89,8 @@ HephaestusEditor::HephaestusEditor (HephaestusProcessor& p)
 
     for (auto& slot : bandKnobs)
     {
-        slot = makeKnob ({}, {});
-        addChildComponent (slot->slider);
-        addChildComponent (slot->caption);
+        slot = std::make_unique<ui::Knob> (ui::Knob::Layout::below);
+        addChildComponent (*slot);
     }
 
     addChoiceBox (curveBox, curveAttachment, id::curve,
@@ -102,9 +103,9 @@ HephaestusEditor::HephaestusEditor (HephaestusProcessor& p)
     removeButton.setButtonText ("REMOVE");
     addSaturateButton.setButtonText ("+ SATURATE BAND");
     addFillButton.setButtonText ("+ HARMONIC FILL BAND");
-    saturateModeButton.setColour (juce::TextButton::buttonOnColourId, colour::forMode (BandMode::saturate));
-    fillModeButton.setColour (juce::TextButton::buttonOnColourId, colour::forMode (BandMode::fill));
-    addFillButton.setColour (juce::TextButton::buttonOnColourId, colour::forMode (BandMode::fill));
+    saturateModeButton.setColour (juce::TextButton::buttonOnColourId, forMode (BandMode::saturate));
+    fillModeButton.setColour (juce::TextButton::buttonOnColourId, forMode (BandMode::fill));
+    addFillButton.setColour (juce::TextButton::buttonOnColourId, forMode (BandMode::fill));
     saturateModeButton.setTooltip ("Add harmonics by driving this band into a waveshaper (uses Curve and Even).");
     fillModeButton.setTooltip ("Add harmonics above this band, only as much as is missing (see ADAPT).");
     removeButton.setTooltip ("Free this band slot.");
@@ -152,27 +153,10 @@ HephaestusEditor::~HephaestusEditor()
     setLookAndFeel (nullptr);
 }
 
-std::unique_ptr<HephaestusEditor::Knob> HephaestusEditor::makeKnob (const juce::String& caption, const juce::String& tooltip)
-{
-    auto knob = std::make_unique<Knob>();
-    knob->slider.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 78, 18);
-    knob->slider.setTooltip (tooltip);
-    knob->slider.setColour (juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
-    knob->slider.setColour (juce::Slider::textBoxBackgroundColourId, juce::Colours::transparentBlack);
-    knob->slider.setRotaryParameters (juce::degreesToRadians (225.0f), juce::degreesToRadians (495.0f), true);
-    knob->caption.setText (caption, juce::dontSendNotification);
-    knob->caption.setFont (juce::FontOptions (10.5f, juce::Font::bold));
-    knob->caption.setColour (juce::Label::textColourId, colour::dim);
-    knob->caption.setJustificationType (juce::Justification::centred);
-    return knob;
-}
-
 void HephaestusEditor::addKnob (const char* paramId, const char* caption, const char* tooltip)
 {
-    auto knob = makeKnob (caption, tooltip);
-    knob->attachment = std::make_unique<SliderAttachment> (proc.apvts, paramId, knob->slider);
-    addAndMakeVisible (knob->slider);
-    addAndMakeVisible (knob->caption);
+    auto knob = std::make_unique<ui::Knob> (proc.apvts, paramId, caption, tooltip, ui::Knob::Layout::below);
+    addAndMakeVisible (*knob);
     knobs.push_back (std::move (knob));
 }
 
@@ -222,19 +206,17 @@ void HephaestusEditor::refreshBandPanel()
             continue;
 
         auto& knob = *bandKnobs[(size_t) bandKnobCount++];
-        knob.attachment.reset();
-        knob.caption.setText (spec.caption, juce::dontSendNotification);
-        knob.slider.setTooltip (spec.tooltip);
-        knob.attachment = std::make_unique<SliderAttachment> (proc.apvts, bandIds (band).*spec.field, knob.slider);
+        knob.setCaption (spec.caption);
+        knob.setKnobTooltip (spec.tooltip);
+        knob.bind (proc.apvts, bandIds (band).*spec.field);
     }
 
     for (int k = 0; k < maxBands; ++k)
     {
         auto& knob = *bandKnobs[(size_t) k];
         if (k >= bandKnobCount)
-            knob.attachment.reset();
-        knob.slider.setVisible (k < bandKnobCount);
-        knob.caption.setVisible (k < bandKnobCount);
+            knob.unbind();
+        knob.setVisible (k < bandKnobCount);
     }
 
     saturateModeButton.setToggleState (mode == BandMode::saturate, juce::dontSendNotification);
@@ -284,9 +266,7 @@ void HephaestusEditor::layoutBandPanel()
     const int cellW = area.getWidth() / spec.columns;
     for (int k = 0; k < bandKnobCount; ++k)
     {
-        auto cell = juce::Rectangle<int> (area.getX() + k * cellW, area.getY(), cellW, cellHeight);
-        bandKnobs[(size_t) k]->caption.setBounds (cell.removeFromTop (captionHeight));
-        bandKnobs[(size_t) k]->slider.setBounds (cell);
+        bandKnobs[(size_t) k]->setBounds (area.getX() + k * cellW, area.getY(), cellW, cellHeight);
     }
 }
 
@@ -302,22 +282,23 @@ void HephaestusEditor::layoutPanelKnobs (Panel which)
         if (knobSpecs[k].panel != (int) which)
             continue;
 
-        auto cell = juce::Rectangle<int> (area.getX() + (index % spec.columns) * cellW,
-                                          area.getY() + (index / spec.columns) * cellHeight, cellW, cellHeight);
-        knobs[k]->caption.setBounds (cell.removeFromTop (captionHeight));
-        knobs[k]->slider.setBounds (cell);
+        knobs[k]->setBounds (area.getX() + (index % spec.columns) * cellW, area.getY() + (index / spec.columns) * cellHeight, cellW, cellHeight);
         ++index;
     }
 }
 
 void HephaestusEditor::resized()
 {
-    auto bounds = getLocalBounds().reduced (16, 0);
+    auto bounds = getLocalBounds().reduced (12, 0);
 
-    // Header.
-    auto header = bounds.removeFromTop (56);
+    // Header: the nameplate, the selectors and switches, and the level meters in a window of glass.
+    auto header = bounds.removeFromTop (headerHeight).withTrimmedTop (8).withTrimmedBottom (8);
+    nameplate = header.removeFromLeft (250);
+    header.removeFromLeft (24);
+    meterArea = header.removeFromRight (120).reduced (0, 10);
+    header.removeFromRight (16);
     {
-        auto h = header.withTrimmedLeft (300).withTrimmedTop (22).withTrimmedBottom (8);
+        auto h = header.withTrimmedTop (28).withHeight (28);
         for (auto [component, width, gap] : { std::tuple<juce::Component*, int, int> { &presetBox, 170, 12 },
                                               { &stereoBox, 120, 12 }, { &osBox, 76, 16 },
                                               { &deltaButton, 64, 8 }, { &matchButton, 96, 0 } })
@@ -325,26 +306,25 @@ void HephaestusEditor::resized()
             component->setBounds (h.removeFromLeft (width));
             h.removeFromLeft (gap);
         }
-        meterArea = header.removeFromRight (96).withTrimmedTop (14).withTrimmedBottom (14);
     }
 
-    bounds.removeFromTop (6);
+    bounds.removeFromTop (10);
     spectrum.setBounds (bounds.removeFromTop (224));
     bounds.removeFromTop (10);
 
     // Panels: the selected band | character over master.
-    auto row = bounds.removeFromTop (268);
+    auto row = bounds.removeFromTop (panelRowHeight);
     panelBounds[(size_t) Panel::band] = row.removeFromLeft (690);
     row.removeFromLeft (12);
-    panelBounds[(size_t) Panel::character] = row.removeFromTop (130);
+    panelBounds[(size_t) Panel::character] = row.removeFromTop ((panelRowHeight - 8) / 2);
     row.removeFromTop (8);
-    panelBounds[(size_t) Panel::master] = row.removeFromTop (130);
+    panelBounds[(size_t) Panel::master] = row;
 
-    // Character panel: the curve sits in the first column, ahead of the EVEN knob.
+    // Character panel: the curve sits in the first column, ahead of the EVEN knob, level with the knobs' faces.
     {
         const auto& spec = panelSpecs[(size_t) Panel::character];
         const auto area = panelBounds[(size_t) Panel::character].reduced (8, 0).withTrimmedTop (spec.knobTop);
-        curveBox.setBounds (area.getX() + 10, area.getY() + 26, area.getWidth() / spec.columns - 20, 28);
+        curveBox.setBounds (area.getX() + 10, area.getY() + 48, area.getWidth() / spec.columns - 20, 28);
     }
 
     layoutBandPanel();
@@ -369,24 +349,16 @@ void HephaestusEditor::mouseDown (const juce::MouseEvent& e)
 
 void HephaestusEditor::paint (juce::Graphics& g)
 {
-    using namespace colour;
+    namespace hw = ui::hw;
 
-    g.setGradientFill (juce::ColourGradient (juce::Colour (0xff1a1410), 0.0f, 0.0f, background, 0.0f, (float) getHeight(), false));
-    g.fillAll();
+    hw::fillMetal (g, getLocalBounds().toFloat(), colours::background);
+    hw::drawHeaderPlate (g, juce::Rectangle<float> (0.0f, 0.0f, (float) getWidth(), (float) headerHeight));
+    hw::drawNameplate (g, nameplate, "Hephaestus", "Forge", "Harmonic saturator", inLevel > 0.001f, 21.0f);
 
-    // Title block.
-    g.setColour (ember);
-    g.setFont (juce::FontOptions (26.0f, juce::Font::bold));
-    g.drawText ("HEPHAESTUS", 20, 8, 280, 32, juce::Justification::left);
-    g.setColour (dim);
-    g.setFont (juce::FontOptions (10.5f, juce::Font::bold));
-    g.drawText ("HARMONIC FORGE  -  MASTERING SATURATOR", 22, 38, 280, 14, juce::Justification::left);
-
-    // Small captions above the header combos.
-    g.setFont (juce::FontOptions (9.0f, juce::Font::bold));
-    for (auto [box, caption] : { std::pair<juce::Component*, const char*> { &presetBox, "PRESET" },
-                              { &stereoBox, "STEREO MODE" }, { &osBox, "OVERSAMPLING" } })
-        g.drawText (caption, box->getX() + 2, 8, 100, 12, juce::Justification::left);
+    // Small captions above the header selectors.
+    for (auto [box, caption] : { std::pair<juce::Component*, const char*> { &presetBox, "Preset" },
+                                 { &stereoBox, "Stereo mode" }, { &osBox, "Oversampling" } })
+        hw::drawLabel (g, caption, { box->getX() + 2, box->getY() - 14, 110, 12 }, juce::Justification::left, colours::dim, 9.0f);
 
     // Panels.
     const int band = spectrum.getSelectedBand();
@@ -396,71 +368,69 @@ void HephaestusEditor::paint (juce::Graphics& g)
     for (size_t i = 0; i < panelBounds.size(); ++i)
     {
         const auto r = panelBounds[i];
-
-        g.setColour (colour::panel);
-        g.fillRoundedRectangle (r.toFloat(), 8.0f);
-        g.setColour (panelEdge);
-        g.drawRoundedRectangle (r.toFloat().reduced (0.5f), 8.0f, 1.0f);
+        hw::drawModule (g, r.toFloat());
 
         juce::String title = panelSpecs[i].title;
         if (i == (size_t) Panel::band)
             title << " " << (band + 1) << (bandOn ? juce::String ("  -  ") + modeName (mode) : "  -  FREE");
 
-        g.setColour (i == (size_t) Panel::band && bandOn ? forMode (mode) : copper);
-        g.setFont (juce::FontOptions (11.5f, juce::Font::bold));
-        g.drawText (title, r.getX() + 14, r.getY() + 9, 300, 14, juce::Justification::left);
-        g.setColour (dim);
-        g.setFont (juce::FontOptions (10.0f));
-        g.drawText (panelSpecs[i].subtitle, r.getX() + 14, r.getY() + 9, r.getWidth() - 28, 14, juce::Justification::right);
+        hw::drawLabel (g, title, { r.getX() + 18, r.getY() + 10, 300, 14 }, juce::Justification::left,
+                       i == (size_t) Panel::band && bandOn ? forMode (mode) : colours::text, 10.5f);
+        hw::drawLabel (g, panelSpecs[i].subtitle, { r.getX() + 14, r.getY() + 10, r.getWidth() - 32, 14 }, juce::Justification::right, colours::dim, 9.0f);
     }
 
-    g.setColour (dim);
-    g.setFont (juce::FontOptions (10.5f, juce::Font::bold));
-    g.drawText ("CURVE", curveBox.getX(), curveBox.getY() - 16, curveBox.getWidth(), 14, juce::Justification::centred);
+    {
+        const auto& spec = panelSpecs[(size_t) Panel::character];
+        hw::drawLabel (g, "Curve", { curveBox.getX(), panelBounds[(size_t) Panel::character].getY() + spec.knobTop, curveBox.getWidth(), 16 },
+                       juce::Justification::centred, colours::dim, 9.5f);
+    }
 
-    // Band chips: one per slot. Lit in the band's colour when it exists.
+    // Band chips: one push switch per slot, lit in the band's colour when the band exists; the selected one is ringed.
     for (int i = 0; i < maxBands; ++i)
     {
         const auto r = chipBounds[(size_t) i].toFloat();
         const bool on = isBandOn (proc.apvts, i);
         const auto c = forMode (bandMode (proc.apvts, i));
 
-        g.setColour (on ? c.withAlpha (i == band ? 0.95f : 0.5f) : colour::panel.brighter (0.05f));
-        g.fillRoundedRectangle (r, 5.0f);
-        g.setColour (i == band ? text : (on ? c.withAlpha (0.7f) : panelEdge));
-        g.drawRoundedRectangle (r.reduced (0.5f), 5.0f, i == band ? 1.5f : 1.0f);
-        g.setColour (on ? juce::Colour (0xff1a0d05) : dim);
-        g.setFont (juce::FontOptions (12.5f, juce::Font::bold));
+        hw::drawPushButton (g, r, on, i == band ? c : c.withMultipliedBrightness (0.7f));
+        if (i == band)
+        {
+            g.setColour (colours::text);
+            g.drawRoundedRectangle (r.expanded (1.5f), 4.0f, 1.2f);
+        }
+        g.setColour (on ? juce::Colour (0xff1c1300) : colours::dim);
+        g.setFont (ui::labelFont (11.5f));
         g.drawText (juce::String (i + 1), r, juce::Justification::centred, false);
     }
 
     // What the selected band does.
     {
         const auto bandPanel = panelBounds[(size_t) Panel::band];
-        g.setColour (dim);
+        g.setColour (colours::dim);
         g.setFont (juce::FontOptions (11.5f));
-        g.drawFittedText (bandHint(), bandPanel.getX() + 14, bandPanel.getY() + 68, bandPanel.getWidth() - 28, 36,
+        g.drawFittedText (bandHint(), bandPanel.getX() + 18, bandPanel.getY() + 74, bandPanel.getWidth() - 36, 36,
                           juce::Justification::topLeft, 2);
     }
 
-    // Meters.
+    // Level meters: two bars in one window of glass, green until -6 dBFS, amber to -0.5, red above (a lamp's verdict colours).
+    hw::drawGlass (g, meterArea.toFloat(), 3.0f, colours::amber);
     const auto drawMeter = [&] (juce::Rectangle<int> r, float level, const juce::String& name)
     {
-        g.setColour (juce::Colour (0xff120f0d));
-        g.fillRoundedRectangle (r.toFloat(), 3.0f);
+        hw::drawLabel (g, name, r.removeFromLeft (26), juce::Justification::centredRight, colours::dim, 8.5f);
+        r.removeFromLeft (4);
+        g.setColour (colours::glassGrid);
+        g.fillRoundedRectangle (r.toFloat(), 2.0f);
 
         const float db = juce::Decibels::gainToDecibels (level, -60.0f);
         const float fill = juce::jlimit (0.0f, 1.0f, (db + 60.0f) / 60.0f);
-        g.setColour (db > -0.5f ? juce::Colours::red : (db > -6.0f ? glow : ember));
-        g.fillRoundedRectangle (r.toFloat().withWidth ((float) r.getWidth() * fill), 3.0f);
-        g.setColour (dim);
-        g.setFont (juce::FontOptions (8.5f, juce::Font::bold));
-        g.drawText (name, r.getX() - 22, r.getY() - 2, 20, r.getHeight() + 4, juce::Justification::centredRight);
+        g.setColour (db > -0.5f ? colours::bad : (db > -6.0f ? colours::warn : colours::good));
+        g.fillRoundedRectangle (r.toFloat().withWidth ((float) r.getWidth() * fill), 2.0f);
     };
-    auto m = meterArea;
+    auto m = meterArea.reduced (8, 7);
     drawMeter (m.removeFromTop (m.getHeight() / 2 - 2), inLevel, "IN");
     m.removeFromTop (4);
     drawMeter (m, outLevel, "OUT");
+    hw::drawGlassOverlay (g, meterArea.toFloat(), 3.0f, false);
 }
 
 void HephaestusEditor::timerCallback()

@@ -67,7 +67,7 @@ public:
         else
         {
             captionArea = r.removeFromTop (16);
-            readout = r.removeFromBottom (24).reduced (juce::jmax (0, (r.getWidth() - 96) / 2), 2);
+            readout = r.removeFromBottom (24).reduced (juce::jmax (0, (r.getWidth() - 84) / 2), 2);
             slider.setBounds (r.reduced (juce::jmax (0, (r.getWidth() - r.getHeight()) / 2), 2));
         }
     }

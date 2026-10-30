@@ -39,7 +39,7 @@ Source/DSP/        no GUI dependencies; everything here is covered by Tests/Test
   AnalyzerTap.h      lock-free sample FIFOs (audio thread -> editor)
   SpectrumAnalyzer.h EQ-style FFT analyzer (GUI-free so its calibration is testable)
 Source/Parameters.h  parameter layout, presets, readParams(), band helpers, legacy migration  <- the single source of truth for parameters
-Source/Plugin*.{h,cpp}, Source/UI/   JUCE wrapper and editor
+Source/Plugin*.{h,cpp}, Source/UI/   JUCE wrapper and editor (the look is `shared/ui`; `UI/HephaestusUi.h` holds what is Hephaestus' own)
 Tests/               Tests.cpp (DSP), UiCheck.cpp (mouse drags, slots, legacy sessions), HostCheck.cpp (loads the VST3),
                      Snapshot.cpp (editor -> PNG), Check.h, TestSignals.h
 ```
@@ -96,7 +96,8 @@ and `UiCheck` covers it. Never build a `juce::String` on the audio thread: look 
 - where a band really sits (minimum width, the 2 kHz fill limit), where its harmonics land (the zone the display shades) and which harmonics
   fit below Nyquist -> `effectiveRange()` / `harmonicSpan()` / `highestHarmonic()` / `harmonicReach()` (the adaptive measurement region) in `Band.h`
   (engine, spectrum view and tests all call them; test [5f] pins the span against measured energy)
-- band colours -> `colour::forMode()` in `Look.h`
+- band colours -> `hep::ui::forMode()` in `UI/HephaestusUi.h`
+- every pixel of the interface (panels, glass, lamps, knobs, buttons, fonts, the palette) -> `shared/ui`, shared with the other plugins (see the repository's [CLAUDE.md](../../CLAUDE.md)); the editor calls it and does not draw its own
 - knob id / caption / tooltip / panel membership -> `knobSpecs` and `panelSpecs` (character, master) and `bandKnobSpecs` (the six slots that follow the selected band) in `PluginEditor.cpp`
 - log-frequency axis -> `FreqAxis` in `SpectrumView.h`
 - test signals and `check()` -> `Tests/TestSignals.h`, `Tests/Check.h`
