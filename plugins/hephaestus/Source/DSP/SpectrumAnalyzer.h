@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 The Pantheon authors
+
 #pragma once
 
 #include "AnalyzerTap.h"
@@ -8,10 +11,10 @@
 
 namespace hep
 {
-// Real-time spectrum analysis for the display, modelled on FabFilter Pro-Q's analyzer:
-//  - an 8192-point FFT (Pro-Q's "Maximum" resolution) for good low-frequency detail,
+// Real-time spectrum analysis for the display, modelled on the analyzer of a typical parametric EQ:
+//  - an 8192-point FFT (the highest resolution such analyzers offer) for good low-frequency detail,
 //  - fast attack and a selectable release ("Speed"),
-//  - a tilt in dB/octave around 1 kHz (Pro-Q's default is 4.5 dB/oct), so typical programme
+//  - a tilt in dB/octave around 1 kHz (4.5 dB/oct is a common default), so typical programme
 //    material looks roughly flat and tonal imbalances stand out.
 //
 // Levels are calibrated in dBFS: a full-scale sine centred on a bin reads 0 dB (before tilt).

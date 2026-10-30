@@ -1,4 +1,7 @@
 #!/bin/zsh
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 The Pantheon authors
+
 # Builds the offline DSP tools with Xcode's toolchain (no JUCE required) and runs the accuracy tests.
 #   scripts/build_tests.sh          build + run tests
 # Also produces build-tools/tune_wav, a command-line tuner for WAV files:

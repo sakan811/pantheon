@@ -39,7 +39,7 @@ allowed notes.
 ### Tips for the most natural result
 
 * Use **Natural** style first; raise Speed only if notes still sound off.
-* Choose the **correct key**. Wrong-key notes are the most audible "autotune" sign.
+* Choose the **correct key**. Wrong-key notes are the most audible sign of pitch correction.
 * Block notes your melody never uses (click the piano keys): fewer wrong-note snaps.
 * Pick your **Voice** type rather than Auto if the vocal is clean and solo.
 * Works on one voice at a time. Not for chords, backing-vocal stacks or full mixes.
@@ -124,3 +124,10 @@ Source/ui/         Theme/look-and-feel, PitchGraph, NoteKeyboard
 Tests/             dsp_test, tune_wav, DevTool, synthetic voice generator
 scripts/           build.sh, build_tests.sh, toolchain.sh (shared Xcode clang/SDK lookup)
 ```
+
+## License
+
+Free software under the **GNU Affero General Public License v3.0 or later** ([LICENSE](../../LICENSE)). It is built on
+[JUCE](https://juce.com) under the AGPLv3 option. This repository is source only: it publishes no binaries. Third-party
+components, trademarks and the build policy are in [NOTICE.md](../../NOTICE.md); how to suggest something is in
+[CONTRIBUTING.md](../../CONTRIBUTING.md) (suggestions are welcome, code contributions are not accepted).

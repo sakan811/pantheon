@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 The Pantheon authors
+
 // Offline command-line front end for the Harmonia engine: tune a WAV file.
 //   tune_wav in.wav out.wav [--key C] [--scale major|minor|chromatic|...] [--speed ms]
 //            [--natural 0..1] [--strength 0..1] [--formant semitones] [--range low|mid|high|auto]

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 The Pantheon authors
+
 #pragma once
 
 #include "../DSP/Engine.h"
@@ -25,7 +28,7 @@ struct FreqAxis
 // edited here: double-click to add one, drag an edge to resize it, drag its body to move it,
 // right-click for its mode and Remove. Saturate bands are ember, harmonic fill bands cyan.
 //
-// Analysis and defaults follow FabFilter Pro-Q's analyzer: 8192-point FFT, fast attack, selectable
+// Analysis and defaults follow the analyzer of a typical parametric EQ: 8192-point FFT, fast attack, selectable
 // release, a 90 dB range and a 4.5 dB/oct tilt around 1 kHz. Range, speed and tilt are chosen from
 // the right-click menu on empty space and saved with the project.
 class SpectrumView : public juce::Component, public juce::SettableTooltipClient, private juce::Timer
@@ -547,7 +550,7 @@ private:
     juce::AudioProcessorValueTreeState& apvts;
     const double& sampleRate;
 
-    // Pro-Q defaults: 90 dB range and 4.5 dB/oct tilt; medium release.
+    // Defaults: 90 dB range and 4.5 dB/oct tilt; medium release.
     Setting range { "Range", "spectrumRange", { { "60 dB", 60.0f }, { "90 dB", 90.0f }, { "120 dB", 120.0f } }, 1 };
     Setting speed { "Speed", "spectrumSpeed", { { "Slow", 0.8f }, { "Medium", 0.4f }, { "Fast", 0.15f } }, 1 };
     Setting tilt  { "Tilt",  "spectrumTilt",  { { "0 dB/oct", 0.0f }, { "3 dB/oct", 3.0f }, { "4.5 dB/oct", SpectrumAnalyzer::defaultTilt }, { "6 dB/oct", 6.0f } }, 2 };

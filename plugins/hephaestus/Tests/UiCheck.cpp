@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 The Pantheon authors
+
 // Drives the real spectrum component with synthetic mouse events and checks what lands in the
 // parameters: edge and body drags, "narrowest band wins", the minimum width, fill-band limits,
 // slot allocation. Also loads a session saved before bands existed, and follows latency reporting

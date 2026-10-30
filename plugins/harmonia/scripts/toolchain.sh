@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 The Pantheon authors
+
 # Sourced by build.sh and build_tests.sh: locates Xcode's own clang and SDK.
 #
 # The default /usr/bin/clang can link against a broken Command Line Tools SDK, so everything is

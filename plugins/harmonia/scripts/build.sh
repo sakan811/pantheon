@@ -1,4 +1,7 @@
 #!/bin/zsh
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 The Pantheon authors
+
 # Configure + build the Harmonia plug-ins (VST3, AU, Standalone) and install them for the current user.
 #
 # Uses Xcode's clang + SDK directly with Unix Makefiles, so it works even when `xcodebuild`

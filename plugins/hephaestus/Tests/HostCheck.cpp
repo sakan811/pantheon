@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 The Pantheon authors
+
 // Loads the built VST3 the way a host does and exercises it: instantiate, prepare at several
 // sample rates / block sizes, fuzz every parameter while processing, state + preset round trips,
 // latency reporting.

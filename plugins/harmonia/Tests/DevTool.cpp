@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 The Pantheon authors
+
 // Developer tool (not part of the shipped plug-in):
 //   HarmoniaDevTool selftest              drive the real HarmoniaProcessor with a synthetic vocal
 //   HarmoniaDevTool snapshot out.png [seconds [in.wav start]]

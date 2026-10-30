@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 The Pantheon authors
+
 // Stress scenarios for the pitch corrector: large vibrato, slow drift, sagging note ends.
 // Every scenario knows which note the singer meant, so we can score what the corrector decided.
 //   stress_corrector            run all scenarios and print a table

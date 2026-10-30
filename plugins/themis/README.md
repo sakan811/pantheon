@@ -142,14 +142,14 @@ tests/                 test_main.cpp (DSP), plugin_smoke.cpp (headless JUCE)
 ### Continuous integration
 [.github/workflows/build.yml](../../.github/workflows/build.yml) builds the universal VST3 + AU on a macOS runner and a VST3 on
 Linux, and runs the DSP tests, on every push. It checks that the code builds and publishes nothing: no downloadable binaries, by design.
-Releases are version tags made by hand, source only (see [NOTICE.md](NOTICE.md)).
+Releases are version tags made by hand, source only (see [NOTICE.md](../../NOTICE.md)).
 
 Security checks, all free for a public repository and none of them publishing anything: [codeql.yml](../../.github/workflows/codeql.yml)
 (CodeQL static analysis of the C++ on every push, pull request and weekly), [dependency-review.yml](../../.github/workflows/dependency-review.yml)
 (fails a pull request that adds a dependency with a known high-severity vulnerability) and Dependabot
 ([dependabot.yml](../../.github/dependabot.yml)) keeping the actions up to date. The workflows have read-only tokens and pin every
 action to a commit SHA. Secret scanning with push protection is on, and `main` requires the build checks to pass and cannot be
-force-pushed. To report a vulnerability, see [SECURITY.md](SECURITY.md).
+force-pushed. To report a vulnerability, see [SECURITY.md](../../SECURITY.md).
 
 ### What has and hasn't been verified
 
@@ -175,18 +175,18 @@ force-pushed. To report a vulnerability, see [SECURITY.md](SECURITY.md).
 
 ## License
 
-Themis is free software, licensed under the **GNU Affero General Public License v3.0 or later** ([LICENSE](LICENSE)). It is
+Themis is free software, licensed under the **GNU Affero General Public License v3.0 or later** ([LICENSE](../../LICENSE)). It is
 built on [JUCE](https://juce.com), which is dual-licensed under the AGPLv3 and a commercial licence; Themis uses the AGPLv3
 option, and JUCE is fetched when you configure the build and is not part of this repository. Third-party components,
-trademarks and the "source only" policy are described in [NOTICE.md](NOTICE.md). Themis is maintained by one person:
-suggestions and bug reports are welcome as issues, code contributions are not accepted ([CONTRIBUTING.md](CONTRIBUTING.md)).
+trademarks and the "source only" policy are described in [NOTICE.md](../../NOTICE.md). Themis is maintained by one person:
+suggestions and bug reports are welcome as issues, code contributions are not accepted ([CONTRIBUTING.md](../../CONTRIBUTING.md)).
 
 ## Terms of use
 
 - **Source only.** This repository contains the code, not a download, and publishes no binaries; releases are source only. Building and
-  using Themis yourself is free (see [NOTICE.md](NOTICE.md) for the policy and the third-party components).
+  using Themis yourself is free (see [NOTICE.md](../../NOTICE.md) for the policy and the third-party components).
 - **Passing it on.** If you give a build to somebody else, the AGPL requires you to give them the corresponding source
-  (see [NOTICE.md](NOTICE.md)), because JUCE is licensed under the AGPLv3 or a commercial licence. macOS also quarantines a
+  (see [NOTICE.md](../../NOTICE.md)), because JUCE is licensed under the AGPLv3 or a commercial licence. macOS also quarantines a
   copy that is not signed with a Developer ID certificate and notarised (`xattr -cr "Themis Verdict.vst3"` clears it for
   personal use).
 - **No warranty.** Themis is provided "as is", without warranty of any kind. It measures audio and offers advice based on

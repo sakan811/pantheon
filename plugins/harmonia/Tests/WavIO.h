@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 The Pantheon authors
+
 #pragma once
 
 // Minimal WAV reader/writer for the offline tools (PCM 8/16/24/32 and float32 in, float32 out).

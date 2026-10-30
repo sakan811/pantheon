@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-# Copyright (C) 2026 The Themis authors
+# Copyright (C) 2026 The Pantheon authors
 
 # The hardware-style interface kit shared by the plugins: brushed-metal modules, glass displays, lamps, knobs, the look and
 # feel and the meter cell. Header-only; it needs JUCE's GUI module and nothing from any plugin.

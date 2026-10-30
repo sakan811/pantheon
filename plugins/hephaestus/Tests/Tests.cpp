@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 The Pantheon authors
+
 // Headless DSP verification for Hephaestus. Prints measured numbers (not only pass/fail) so the
 // behaviour documented in the README can be checked against reality.
 
@@ -667,7 +670,7 @@ void testSpectrumAnalyzer()
     check (std::fabs (oneSided.peakInRange (900, 1100) - (sixDb - 3.01)) < 0.2,
            fmt ("left-only signal reads %.2f dB: L/R power is averaged, not summed", oneSided.peakInRange (900, 1100)));
     check (std::fabs (tilted.getTilt() - SpectrumAnalyzer::defaultTilt) < 1.0e-6f && SpectrumAnalyzer::defaultTilt == 4.5f,
-           "default tilt is 4.5 dB/oct, as in FabFilter Pro-Q");
+           "default tilt is 4.5 dB/oct, as in common EQ analyzers");
 }
 
 

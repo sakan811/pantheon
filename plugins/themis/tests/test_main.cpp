@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// Copyright (C) 2026 The Themis authors
+// Copyright (C) 2026 The Pantheon authors
 
 // Self-contained tests for the Themis DSP core (no framework dependency).
 #include <themis/Audition.h>

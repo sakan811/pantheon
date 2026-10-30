@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 The Pantheon authors
+
 // Independent pitch tracker for checking results: pitch_track in.wav out.csv [minHz maxHz]
 // Writes "t,midi" every 5 ms (midi = 0 when unvoiced), using the same YIN detector as the engine.
 

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 The Pantheon authors
+
 // Offline accuracy tests for the Harmonia DSP core (no JUCE needed).
 //   clang++ -std=c++17 -O2 Tests/dsp_test.cpp -o build/dsp_test && build/dsp_test
 

@@ -37,7 +37,7 @@ Source/DSP/        no GUI dependencies; everything here is covered by Tests/Test
   FundamentalEngine.h  Chebyshev "extend" (+ adaptive gain) + difference-tone "rebuild", GapDetector, harmonicsForTone()
   Engine.h           BandParams, latency alignment, band mixing, M/S, gain match, delta, meters, analyzer taps
   AnalyzerTap.h      lock-free sample FIFOs (audio thread -> editor)
-  SpectrumAnalyzer.h Pro-Q-style FFT analyzer (GUI-free so its calibration is testable)
+  SpectrumAnalyzer.h EQ-style FFT analyzer (GUI-free so its calibration is testable)
 Source/Parameters.h  parameter layout, presets, readParams(), band helpers, legacy migration  <- the single source of truth for parameters
 Source/Plugin*.{h,cpp}, Source/UI/   JUCE wrapper and editor
 Tests/               Tests.cpp (DSP), UiCheck.cpp (mouse drags, slots, legacy sessions), HostCheck.cpp (loads the VST3),

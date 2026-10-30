@@ -1,10 +1,10 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-# Copyright (C) 2026 The Themis authors
+# Copyright (C) 2026 The Pantheon authors
 
 name: build
 
 # This repository is source only: CI checks that the code builds and passes its tests. It never packages, uploads or
-# publishes a compiled plugin (see plugins/themis/NOTICE.md).
+# publishes a compiled plugin (see NOTICE.md).
 on:
   push:
     branches: [main]
