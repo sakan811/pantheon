@@ -72,7 +72,7 @@ allowed notes.
 
 ## Building
 
-Requires CMake and Xcode (clang + macOS SDK). JUCE 8.0.12 is fetched automatically.
+Requires CMake and Xcode (clang + macOS SDK). JUCE is fetched automatically (the version is set in `cmake/Juce.cmake` at the repository root).
 
 ```sh
 scripts/build.sh            # configure, build VST3 + AU + Standalone, install, ad-hoc sign

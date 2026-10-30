@@ -31,7 +31,7 @@ Rules that keep it that way:
 
 ## What this is
 
-**Themis Verdict**: a mastering check suite in one plugin (VST3 + AU, Standalone) built on JUCE 8.0.6, targeting macOS plugin hosts (universal arm64 + x86_64, macOS 11+). CMake targets, namespaces and plugin codes use the short name "Themis". The feature list, name origin and the "verified / not verified" table are in the README.
+**Themis Verdict**: a mastering check suite in one plugin (VST3 + AU, Standalone) built on JUCE 8 (the version is set in [cmake/Juce.cmake](../../cmake/Juce.cmake)), targeting macOS plugin hosts (universal arm64 + x86_64, macOS 11+). CMake targets, namespaces and plugin codes use the short name "Themis". The feature list, name origin and the "verified / not verified" table are in the README.
 
 ## Core principles (apply to every change)
 

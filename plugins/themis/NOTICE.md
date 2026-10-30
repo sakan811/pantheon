@@ -25,7 +25,7 @@ Themis' own source (everything under `core/`, `plugin/` and `tests/`) is origina
 images, samples or presets are copied into this repository: the interface is drawn from code, and the built-in target
 curves and device responses are hand-authored approximations.
 
-**JUCE** (<https://juce.com>) is downloaded at configure time by CMake (`FetchContent`, tag 8.0.6) and is **not**
+**JUCE** (<https://juce.com>) is downloaded at configure time by CMake (`FetchContent`, the version is set in [cmake/Juce.cmake](../../cmake/Juce.cmake)) and is **not**
 redistributed in this repository. JUCE is dual-licensed under the AGPLv3 and a commercial licence; Themis uses it under the
 AGPLv3, which is why Themis is itself licensed under the AGPLv3. If you want to use Themis' code in a closed-source
 product you need a JUCE commercial licence and the permission of Themis' copyright holders. JUCE bundles further components

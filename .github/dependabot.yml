@@ -1,5 +1,5 @@
 # Keeps the SHA-pinned actions in .github/workflows up to date. JUCE is fetched by CMake (FetchContent) and is not
-# covered by Dependabot; bump its tag by hand (see CMakeLists.txt).
+# covered by Dependabot; bump its tag by hand (see cmake/Juce.cmake).
 version: 2
 updates:
   - package-ecosystem: github-actions

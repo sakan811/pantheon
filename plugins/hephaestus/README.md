@@ -135,7 +135,7 @@ Details that matter:
 ```bash
 # macOS. SDKROOT works around Command Line Tools shipping an SDK this Xcode's linker can't read.
 export SDKROOT=$(xcrun --sdk macosx --show-sdk-path)
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release    # fetches JUCE 8.0.16-security; a copy in third_party/JUCE is used if present
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release    # fetches JUCE (version in cmake/Juce.cmake); an offline copy in third_party/JUCE at the repository root is used if present
 cmake --build build --target Hephaestus_VST3 Hephaestus_AU Hephaestus_Standalone   # installs to ~/Library/Audio/Plug-Ins
 cmake --build build --target HephaestusTests && ./build/HephaestusTests_artefacts/Release/HephaestusTests
 cmake --build build --target HephaestusHostCheck && ./build/HephaestusHostCheck_artefacts/Release/HephaestusHostCheck ~/Library/Audio/Plug-Ins/VST3/Hephaestus.vst3

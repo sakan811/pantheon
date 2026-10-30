@@ -9,17 +9,8 @@ project(Hephaestus VERSION 1.0.0 LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# JUCE is not vendored. It is fetched at configure time (pinned to a release); a copy placed in
-# third_party/JUCE is used instead, for offline builds.
-include(FetchContent)
-if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third_party/JUCE/CMakeLists.txt")
-    set(FETCHCONTENT_SOURCE_DIR_JUCE "${CMAKE_CURRENT_SOURCE_DIR}/third_party/JUCE")
-endif()
-FetchContent_Declare(JUCE
-    GIT_REPOSITORY https://github.com/juce-framework/JUCE.git
-    GIT_TAG 8.0.16-security
-    GIT_SHALLOW ON)
-FetchContent_MakeAvailable(JUCE)
+# JUCE is not vendored: cmake/Juce.cmake fetches it (and owns the version).
+include(${CMAKE_CURRENT_SOURCE_DIR}/../../cmake/Juce.cmake) # JUCE, one version for the repository
 
 # ---------------------------------------------------------------------------------------
 # Plugin

@@ -1,9 +1,6 @@
 # Build output
 build/
 
-# JUCE is fetched by CMake (see CMakeLists.txt); a local copy here is only for offline builds
-third_party/
-
 # macOS / editors
 .DS_Store
 .vscode/

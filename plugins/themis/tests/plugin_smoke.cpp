@@ -426,11 +426,11 @@ int main (int argc, char** argv)
         wav.deleteFile();
         {
             juce::WavAudioFormat fmt;
-            std::unique_ptr<juce::FileOutputStream> out (wav.createOutputStream());
-            std::unique_ptr<juce::AudioFormatWriter> w (fmt.createWriterFor (out.get(), 44100.0, 2, 16, {}, 0));
+            std::unique_ptr<juce::OutputStream> out (wav.createOutputStream());
+            const auto options = juce::AudioFormatWriterOptions().withSampleRate (44100.0).withNumChannels (2).withBitsPerSample (16);
+            auto w = fmt.createWriterFor (out, options); // takes the stream on success
             if (w != nullptr)
             {
-                out.release();
                 const auto l = pinkNoise (44100 * 14, 5, 0.5f), r = pinkNoise (44100 * 14, 6, 0.5f);
                 const float* chans[] = { l.data(), r.data() };
                 w->writeFromFloatArrays (chans, 2, static_cast<int> (l.size()));

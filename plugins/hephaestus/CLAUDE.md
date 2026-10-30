@@ -11,7 +11,7 @@ you need to change it safely.
 # Required on this machine: the Command Line Tools ship an SDK that Xcode's linker cannot read.
 export SDKROOT=$(xcrun --sdk macosx --show-sdk-path)
 
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release     # fetches JUCE 8.0.16-security (or uses third_party/JUCE)
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release     # fetches JUCE (version in cmake/Juce.cmake; or uses third_party/JUCE at the repository root)
 cmake --build build --target HephaestusTests -j 10 && ./build/HephaestusTests_artefacts/Release/HephaestusTests
 cmake --build build --target Hephaestus_VST3 Hephaestus_AU Hephaestus_Standalone -j 10
 cmake --build build --target HephaestusUiCheck && ./build/HephaestusUiCheck_artefacts/Release/HephaestusUiCheck

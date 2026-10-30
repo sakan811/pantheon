@@ -32,12 +32,7 @@ endif()
 
 # ---- Plugin -------------------------------------------------------------------------------------
 if(THEMIS_BUILD_PLUGIN)
-    include(FetchContent)
-    FetchContent_Declare(JUCE
-        GIT_REPOSITORY https://github.com/juce-framework/JUCE.git
-        GIT_TAG        8.0.6
-        GIT_SHALLOW    ON)
-    FetchContent_MakeAvailable(JUCE)
+    include(${CMAKE_CURRENT_SOURCE_DIR}/../../cmake/Juce.cmake) # JUCE, one version for the repository
 
     # The interface kit shared by the plugins of this repository (shared/ui), which needs JUCE's GUI module.
     if(NOT TARGET pantheon_ui)
