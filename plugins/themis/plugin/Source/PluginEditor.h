@@ -14,69 +14,6 @@
 #include <functional>
 #include <memory>
 
-namespace ui
-{
-using Apvts = juce::AudioProcessorValueTreeState;
-
-// A rotary knob bound to a parameter, with its name above a digital read-out of the value. A choice parameter turns it into a
-// detent switch (the tick ring shows the positions).
-class Knob : public juce::Component
-{
-public:
-    Knob (Apvts& state, const juce::String& paramId, const juce::String& labelText, const juce::String& tooltip) : caption (labelText)
-    {
-        slider.setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag);
-        slider.setTextBoxStyle (juce::Slider::NoTextBox, true, 0, 0);
-        slider.setRotaryParameters (juce::MathConstants<float>::pi * 1.25f, juce::MathConstants<float>::pi * 2.75f, true);
-        slider.setMouseDragSensitivity (140);
-        slider.setTooltip (tooltip);
-        addAndMakeVisible (slider);
-        attachment = std::make_unique<Apvts::SliderAttachment> (state, paramId, slider);
-        if (auto* p = state.getParameter (paramId))
-            slider.setDoubleClickReturnValue (true, slider.getNormalisableRange().convertFrom0to1 (p->getDefaultValue()));
-        slider.onValueChange = [this] { repaint(); };
-    }
-
-    void resized() override
-    {
-        auto r = getLocalBounds();
-        slider.setBounds (r.removeFromLeft (r.getHeight()));
-        r.removeFromLeft (4);
-        captionArea = r.removeFromTop (r.getHeight() * 2 / 5).withTrimmedTop (3);
-        readout = r.reduced (0, 2);
-    }
-
-    void paint (juce::Graphics& g) override
-    {
-        hw::drawLabel (g, caption, captionArea, juce::Justification::bottomLeft, colours::dim, 9.5f);
-        hw::drawGlass (g, readout.toFloat(), 3.0f, colours::amber);
-        g.setFont (lcdFont (12.0f));
-        g.setColour (colours::amber);
-        g.drawText (slider.getTextFromValue (slider.getValue()), readout.reduced (6, 0), juce::Justification::centredLeft);
-        hw::drawGlassOverlay (g, readout.toFloat(), 3.0f, false);
-    }
-
-private:
-    juce::Slider slider;
-    juce::String caption;
-    juce::Rectangle<int> captionArea, readout;
-    std::unique_ptr<Apvts::SliderAttachment> attachment;
-};
-
-class Choice : public juce::ComboBox
-{
-public:
-    Choice (Apvts& state, const juce::String& paramId, const juce::StringArray& items)
-    {
-        addItemList (items, 1);
-        attachment = std::make_unique<Apvts::ComboBoxAttachment> (state, paramId, *this);
-    }
-
-private:
-    std::unique_ptr<Apvts::ComboBoxAttachment> attachment;
-};
-} // namespace ui
-
 class ThemisEditor : public juce::AudioProcessorEditor, private juce::Timer
 {
 public:

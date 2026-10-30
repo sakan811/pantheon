@@ -177,44 +177,8 @@ void ThemisEditor::loadCurve()
 void ThemisEditor::paint (juce::Graphics& g)
 {
     ui::hw::fillMetal (g, getLocalBounds().toFloat(), colours::background);
-
-    // the control panel along the top: a slightly lighter plate with a groove under it
-    const auto header = juce::Rectangle<float> (0.0f, 0.0f, static_cast<float> (getWidth()), static_cast<float> (kHeaderHeight + 8));
-    ui::hw::fillMetal (g, header, colours::panel.darker (0.15f));
-    g.setColour (juce::Colours::black.withAlpha (0.65f));
-    g.fillRect (header.getX(), header.getBottom(), header.getWidth(), 2.0f);
-    g.setColour (juce::Colours::white.withAlpha (0.07f));
-    g.fillRect (header.getX(), header.getBottom() + 2.0f, header.getWidth(), 1.0f);
-
-    // the nameplate: the wordmark, what it is, and a lamp that says audio is arriving
-    const auto plate = nameplate.toFloat();
-    ui::hw::fillMetal (g, plate, juce::Colour (0xff3d3a34), 4.0f);
-    g.setColour (juce::Colours::black.withAlpha (0.7f));
-    g.drawRoundedRectangle (plate.reduced (0.5f), 4.0f, 1.0f);
-    g.setColour (juce::Colours::white.withAlpha (0.12f));
-    g.drawRoundedRectangle (plate.reduced (1.5f), 3.0f, 1.0f);
-    ui::hw::drawScrew (g, { plate.getX() + 8.0f, plate.getCentreY() }, 2.6f);
-    ui::hw::drawScrew (g, { plate.getRight() - 8.0f, plate.getCentreY() }, 2.6f);
-
-    const auto words = nameplate.reduced (18, 6);
-    const auto wordmark = words.withHeight (30);
-    const auto project = juce::String (ui::kProjectWord).toUpperCase();
-    g.setFont (ui::wordmarkFont (25.0f));
-    g.setColour (juce::Colours::black.withAlpha (0.55f)); // engraved: a shadow above, the lit edge below
-    g.drawText (project, wordmark.translated (0, -1), juce::Justification::centred);
-    g.setColour (colours::amber.withAlpha (0.18f));
-    g.drawText (project, wordmark.translated (0, 1), juce::Justification::centred);
-    g.setColour (colours::amber);
-    g.drawText (project, wordmark, juce::Justification::centred);
-    g.setColour (colours::text); // the second word, silkscreened between two rules
-    g.setFont (ui::labelFont (11.0f).withExtraKerningFactor (0.45f));
-    const auto verdict = words.withTrimmedTop (30).withHeight (14);
-    g.drawText (juce::String (ui::kPluginWord).toUpperCase(), verdict, juce::Justification::centred);
-    g.setColour (colours::dim.withAlpha (0.5f));
-    g.drawHorizontalLine (verdict.getCentreY(), static_cast<float> (verdict.getX()), static_cast<float> (verdict.getCentreX() - 38));
-    g.drawHorizontalLine (verdict.getCentreY(), static_cast<float> (verdict.getCentreX() + 38), static_cast<float> (verdict.getRight()));
-    ui::hw::drawLabel (g, "Mastering check suite", words.withTrimmedTop (46).withTrimmedRight (14), juce::Justification::centredLeft, colours::dim, 8.0f);
-    ui::hw::drawLamp (g, { static_cast<float> (words.getRight()) - 3.0f, static_cast<float> (words.getBottom()) - 6.0f }, 3.0f, colours::good, signalPresent);
+    ui::hw::drawHeaderPlate (g, juce::Rectangle<float> (0.0f, 0.0f, static_cast<float> (getWidth()), static_cast<float> (kHeaderHeight + 8)));
+    ui::hw::drawNameplate (g, nameplate, ui::kProjectWord, ui::kPluginWord, "Mastering check suite", signalPresent);
 
     ui::hw::drawGlass (g, statusWindow.toFloat(), 3.0f, colours::amber);
     ui::hw::drawGlassOverlay (g, statusWindow.toFloat(), 3.0f, false);

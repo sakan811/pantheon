@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <pantheon/ui/Controls.h>
 #include <pantheon/ui/Hardware.h>
 #include <pantheon/ui/HardwareLookAndFeel.h>
 #include <pantheon/ui/MeterCell.h>

@@ -274,5 +274,50 @@ inline void drawLabel (juce::Graphics& g, const juce::String& text, juce::Rectan
     g.setColour (colour);
     g.drawText (text.toUpperCase(), area, j);
 }
+
+// The control panel along the top of an editor: a slightly lighter plate with a groove under it.
+inline void drawHeaderPlate (juce::Graphics& g, juce::Rectangle<float> header)
+{
+    fillMetal (g, header, colours::panel.darker (0.15f));
+    g.setColour (juce::Colours::black.withAlpha (0.65f));
+    g.fillRect (header.getX(), header.getBottom(), header.getWidth(), 2.0f);
+    g.setColour (juce::Colours::white.withAlpha (0.07f));
+    g.fillRect (header.getX(), header.getBottom() + 2.0f, header.getWidth(), 1.0f);
+}
+
+// The nameplate of a plugin: the wordmark engraved in amber, a second word silkscreened between two rules, a line of small
+// print, and a lamp that says audio is arriving.
+inline void drawNameplate (juce::Graphics& g, juce::Rectangle<int> area, const juce::String& wordmarkText, const juce::String& secondWord,
+                           const juce::String& smallPrint, bool signalPresent, float wordmarkHeight = 25.0f)
+{
+    const auto plate = area.toFloat();
+    fillMetal (g, plate, juce::Colour (0xff3d3a34), 4.0f);
+    g.setColour (juce::Colours::black.withAlpha (0.7f));
+    g.drawRoundedRectangle (plate.reduced (0.5f), 4.0f, 1.0f);
+    g.setColour (juce::Colours::white.withAlpha (0.12f));
+    g.drawRoundedRectangle (plate.reduced (1.5f), 3.0f, 1.0f);
+    drawScrew (g, { plate.getX() + 8.0f, plate.getCentreY() }, 2.6f);
+    drawScrew (g, { plate.getRight() - 8.0f, plate.getCentreY() }, 2.6f);
+
+    const auto words = area.reduced (18, 6);
+    const auto wordmark = words.withHeight (30);
+    const auto name = wordmarkText.toUpperCase();
+    g.setFont (wordmarkFont (wordmarkHeight));
+    g.setColour (juce::Colours::black.withAlpha (0.55f)); // engraved: a shadow above, the lit edge below
+    g.drawText (name, wordmark.translated (0, -1), juce::Justification::centred);
+    g.setColour (colours::amber.withAlpha (0.18f));
+    g.drawText (name, wordmark.translated (0, 1), juce::Justification::centred);
+    g.setColour (colours::amber);
+    g.drawText (name, wordmark, juce::Justification::centred);
+    g.setColour (colours::text); // the second word, silkscreened between two rules
+    g.setFont (labelFont (11.0f).withExtraKerningFactor (0.45f));
+    const auto second = words.withTrimmedTop (30).withHeight (14);
+    g.drawText (secondWord.toUpperCase(), second, juce::Justification::centred);
+    g.setColour (colours::dim.withAlpha (0.5f));
+    g.drawHorizontalLine (second.getCentreY(), static_cast<float> (second.getX()), static_cast<float> (second.getCentreX() - 38));
+    g.drawHorizontalLine (second.getCentreY(), static_cast<float> (second.getCentreX() + 38), static_cast<float> (second.getRight()));
+    drawLabel (g, smallPrint, words.withTrimmedTop (46).withTrimmedRight (14), juce::Justification::centredLeft, colours::dim, 8.0f);
+    drawLamp (g, { static_cast<float> (words.getRight()) - 3.0f, static_cast<float> (words.getBottom()) - 6.0f }, 3.0f, colours::good, signalPresent);
+}
 } // namespace hw
 } // namespace ui
