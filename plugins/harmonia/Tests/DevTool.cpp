@@ -212,7 +212,7 @@ static int snapshot (const char* path, double feedSeconds, const char* wavPath =
     run (proc, in);
 
     auto* editor = new HarmoniaEditor (proc);
-    editor->setSize (1760, 1120);
+    editor->setSize (2 * HarmoniaEditor::kDesignW, 2 * HarmoniaEditor::kDesignH);
     juce::MessageManager::getInstance()->runDispatchLoopUntil (400);
     auto img = editor->createComponentSnapshot (editor->getLocalBounds(), true, 1.0f);
     juce::File f (path);

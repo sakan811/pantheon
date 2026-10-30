@@ -49,7 +49,10 @@ public:
         attachment.reset();
         attachment = std::make_unique<Apvts::SliderAttachment> (state, paramId, slider);
         if (auto* p = state.getParameter (paramId))
+        {
             slider.setDoubleClickReturnValue (true, slider.getNormalisableRange().convertFrom0to1 (p->getDefaultValue()));
+            slider.setTextValueSuffix (p->getLabel().isNotEmpty() ? " " + p->getLabel() : juce::String()); // the unit, where the parameter has one
+        }
     }
 
     void unbind() { attachment.reset(); }

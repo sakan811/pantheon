@@ -4,7 +4,7 @@
 #pragma once
 
 #include "../dsp/Scales.h"
-#include "Theme.h"
+#include "HarmoniaUi.h"
 
 #include <functional>
 
@@ -82,29 +82,29 @@ private:
     void drawKey (juce::Graphics& g, int pc, juce::Rectangle<float> r, bool black)
     {
         const bool on = (mask & (1u << pc)) != 0;
-        const juce::Colour fill = black ? (on ? theme::accent.darker (0.35f) : theme::blackKeyOff)
-                                        : (on ? theme::accent : theme::whiteKeyOff);
+        const juce::Colour fill = black ? (on ? colours::accent.darker (0.35f) : colours::glass)
+                                        : (on ? colours::accent : colours::panelEdge);
 
         g.setColour (fill);
         g.fillRoundedRectangle (r, 4.0f);
-        g.setColour (black ? theme::bg : theme::panelEdge);
+        g.setColour (black ? colours::background : juce::Colours::black.withAlpha (0.6f));
         g.drawRoundedRectangle (r, 4.0f, 1.0f);
 
         if (pc == singing)
         {
-            g.setColour (theme::sung);
+            g.setColour (pitchcolours::sung);
             g.drawRoundedRectangle (r.reduced (1.5f), 4.0f, 2.5f);
         }
 
         const bool isRoot = pc == root;
-        g.setColour (on ? (black ? theme::text : theme::bg) : theme::dim);
-        g.setFont (theme::font (black ? 10.0f : 12.0f, isRoot));
+        g.setColour (on ? (black ? colours::text : colours::glass) : colours::dim);
+        g.setFont (ui::labelFont (black ? 9.5f : 11.0f));
         const auto labelArea = black ? r.removeFromBottom (18.0f) : r.removeFromBottom (24.0f);
         g.drawText (harmonia::kNoteNames[pc], labelArea, juce::Justification::centred);
 
         if (isRoot && on)
         {
-            g.setColour (black ? theme::text : theme::bg);
+            g.setColour (black ? colours::text : colours::glass);
             g.fillEllipse (r.getCentreX() - 2.5f, r.getY() + (black ? r.getHeight() - 30.0f : r.getHeight() - 40.0f), 5.0f, 5.0f);
         }
     }

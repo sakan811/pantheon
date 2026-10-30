@@ -4,9 +4,9 @@
 #pragma once
 
 #include "PluginProcessor.h"
+#include "ui/HarmoniaUi.h"
 #include "ui/NoteKeyboard.h"
 #include "ui/PitchGraph.h"
-#include "ui/Theme.h"
 
 #include <juce_audio_processors/juce_audio_processors.h>
 
@@ -18,9 +18,12 @@ public:
 
     void resized() override;
 
+    static constexpr int kDesignW = 880, kDesignH = 584; // the editor is drawn at this size and scaled
+
 private:
-    static constexpr int kDesignW = 880, kDesignH = 560;
-    static inline const juce::Rectangle<int> kSubtitleBounds { 22, 40, 400, 18 };
+    static constexpr int kHeaderH = 84;
+    static inline const juce::Rectangle<int> kNameplateBounds { 12, 8, 230, 68 };
+    static inline const juce::Rectangle<int> kLatencyBounds { 262, 36, 96, 28 };
 
     using ComboAttachment = juce::AudioProcessorValueTreeState::ComboBoxAttachment;
 
@@ -34,13 +37,6 @@ private:
         }
     };
 
-    struct Knob
-    {
-        juce::Slider slider;
-        std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> attachment;
-        juce::String title;
-    };
-
     void paintContent (juce::Graphics&);
     void timerCallback() override;
 
@@ -50,11 +46,11 @@ private:
     void applyPreset (int index);
     void onDetectClicked();
     void setupChoice (juce::ComboBox&, std::unique_ptr<ComboAttachment>&, const char* id, const juce::String& tip);
-    juce::String makeSubtitle() const;
-    void setupKnob (Knob&, const char* id, const juce::String& title, const juce::String& tip, bool bipolar = false);
+    juce::String makeLatencyText() const;
+    void setupKnob (int index, const char* id, const juce::String& title, const juce::String& tip);
 
     HarmoniaProcessor& proc;
-    HarmoniaLookAndFeel laf;
+    HardwareLookAndFeel laf;
     Content content;
     juce::TooltipWindow tooltips { this, 500 };
 
@@ -64,7 +60,7 @@ private:
     juce::TextButton bypassButton { "Bypass" }, detectButton { "Detect key" }, autoKeyButton { "Auto key" };
     juce::TextButton presetButtons[3];
     juce::Label statusLabel;
-    Knob knobs[6];
+    std::array<std::unique_ptr<ui::Knob>, 6> knobs;
 
     std::unique_ptr<ComboAttachment> rangeAtt, keyAtt, scaleAtt;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> bypassAtt, autoKeyAtt;
@@ -72,7 +68,8 @@ private:
     bool keysLocked = false; // the key follows the vocal: the piano keys cannot be edited
     bool awaitingKeyResult = false;
     juce::uint32 finishClickedAt = 0;
-    juce::String detectedText, subtitle;
+    juce::String detectedText, latencyText;
+    bool singing = false; // the nameplate lamp: a voice is being tracked
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (HarmoniaEditor)
 };

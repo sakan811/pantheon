@@ -15,6 +15,9 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # JUCE is not vendored: cmake/Juce.cmake fetches it (and owns the version).
 include(${CMAKE_CURRENT_SOURCE_DIR}/../../cmake/Juce.cmake) # JUCE, one version for the repository
 
+# The interface kit shared by the plugins of this repository (shared/ui).
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../../shared/ui ${CMAKE_BINARY_DIR}/shared/ui)
+
 set(HARMONIA_SOURCES
     Source/PluginProcessor.cpp
     Source/PluginEditor.cpp)
@@ -49,6 +52,7 @@ target_compile_definitions(Harmonia PUBLIC
 
 target_link_libraries(Harmonia
     PRIVATE
+        pantheon_ui
         juce::juce_audio_utils
     PUBLIC
         juce::juce_recommended_config_flags
@@ -65,5 +69,5 @@ target_compile_definitions(HarmoniaDevTool PRIVATE
     JucePlugin_Name="Harmonia"
     JUCE_MODAL_LOOPS_PERMITTED=1)
 target_link_libraries(HarmoniaDevTool
-    PRIVATE juce::juce_audio_utils
+    PRIVATE pantheon_ui juce::juce_audio_utils
     PUBLIC juce::juce_recommended_config_flags)

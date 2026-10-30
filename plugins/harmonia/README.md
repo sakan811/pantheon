@@ -33,7 +33,7 @@ Harmonia while recording, you will hear that delay: record dry and add Harmonia 
 | **Voice** | Bass/baritone, tenor/alto, soprano or Auto. Narrows the pitch search: faster, never jumps an octave. |
 | **Bypass** | Original vocal, delayed by the latency so it stays aligned. |
 
-The graph shows your pitch (blue) and the corrected pitch (green) over the last few seconds against the
+The graph shows your pitch (amber) and the corrected pitch (teal) over the last few seconds against the
 allowed notes.
 
 ### Tips for the most natural result
@@ -120,7 +120,7 @@ build/HarmoniaDevTool_artefacts/Release/HarmoniaDevTool snapshot ui.png
 Source/dsp/        JUCE-free engine: Scales, KeyTracker, PitchDetector, PitchCorrector, AutoTuneEngine,
                    Kernels (SIMD-friendly sums), Rings (history buffers)
 Source/            PluginProcessor (parameters, host glue), PluginEditor
-Source/ui/         Theme/look-and-feel, PitchGraph, NoteKeyboard
+Source/ui/         PitchGraph, NoteKeyboard, HarmoniaUi.h (the two pitch colours); the look itself is shared/ui
 Tests/             dsp_test, tune_wav, DevTool, synthetic voice generator
 scripts/           build.sh, build_tests.sh, toolchain.sh (shared Xcode clang/SDK lookup)
 ```

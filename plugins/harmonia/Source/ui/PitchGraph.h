@@ -4,10 +4,10 @@
 #pragma once
 
 #include "../PluginProcessor.h"
-#include "Theme.h"
+#include "HarmoniaUi.h"
 
 // Scrolling pitch display: piano-roll lanes for the notes the tuner may use, the singer's
-// own pitch (blue) and the corrected pitch (green).
+// own pitch (amber) and the corrected pitch (teal), on a window of glass.
 class PitchGraph : public juce::Component, private juce::Timer
 {
 public:
@@ -18,11 +18,10 @@ public:
     void paint (juce::Graphics& g) override
     {
         const auto full = getLocalBounds().toFloat();
-        g.setColour (theme::panel);
-        g.fillRoundedRectangle (full, 10.0f);
+        ui::hw::drawGlass (g, full, 6.0f, colours::accent);
 
         const float labelW = 40.0f;
-        const auto plot = full.withTrimmedLeft (labelW).reduced (0.0f, 6.0f).withTrimmedRight (8.0f);
+        const auto plot = full.withTrimmedLeft (labelW).reduced (0.0f, 8.0f).withTrimmedRight (10.0f);
         const float laneH = plot.getHeight() / kSemitonesShown;
         auto yOf = [&] (float midi) { return plot.getCentreY() - (midi - viewCenter) * laneH; };
 
@@ -30,7 +29,7 @@ public:
 
         {
             juce::Graphics::ScopedSaveState state (g);
-            g.reduceClipRegion (full.reduced (1.0f).toNearestInt());
+            g.reduceClipRegion (full.reduced (3.0f).toNearestInt());
 
             const int lo = (int) std::floor (viewCenter - kSemitonesShown * 0.5f) - 1;
             const int hi = (int) std::ceil (viewCenter + kSemitonesShown * 0.5f) + 1;
@@ -44,16 +43,16 @@ public:
                 if (allowed)
                 {
                     const bool isTarget = voicedNow && std::abs ((float) n - targetNow) < 0.01f;
-                    g.setColour (theme::accent.withAlpha (isTarget ? 0.20f : 0.07f));
+                    g.setColour (colours::accent.withAlpha (isTarget ? 0.20f : 0.07f));
                     g.fillRect (lane);
                 }
-                g.setColour (theme::panelEdge.withAlpha (pc == 0 ? 0.9f : 0.45f));
+                g.setColour (colours::glassGrid.withAlpha (pc == 0 ? 1.0f : 0.6f));
                 g.fillRect (plot.getX(), yTop + laneH - 0.5f, plot.getWidth(), 1.0f);
 
                 if (allowed || pc == 0)
                 {
-                    g.setColour (allowed ? (pc == 0 ? theme::text : theme::dim) : theme::faint);
-                    g.setFont (theme::font (11.0f, pc == 0));
+                    g.setColour (allowed ? (pc == 0 ? colours::text : colours::dim) : colours::dim.withAlpha (0.4f));
+                    g.setFont (ui::lcdFont (11.0f, pc == 0 ? juce::Font::bold : juce::Font::plain));
                     g.drawText (noteName (n), juce::Rectangle<float> (full.getX() + 4.0f, yTop, labelW - 8.0f, laneH),
                                 juce::Justification::centredRight);
                 }
@@ -62,32 +61,33 @@ public:
             drawTraces (g, plot, yOf);
         }
 
-        g.setColour (theme::panelEdge);
-        g.drawRoundedRectangle (full.reduced (0.5f), 10.0f, 1.0f);
-
         if (! anyVoiced)
         {
-            g.setColour (theme::dim);
-            g.setFont (theme::font (14.0f));
+            g.setColour (colours::dim);
+            g.setFont (ui::font (14.0f));
             g.drawText ("Play or record a vocal - your pitch will appear here", plot, juce::Justification::centred);
         }
         else if (readout.isNotEmpty())
         {
             const auto chip = juce::Rectangle<float> (plot.getX() + 10.0f, plot.getY() + 8.0f, 176.0f, 26.0f);
-            g.setColour (theme::bg.withAlpha (0.75f));
-            g.fillRoundedRectangle (chip, 7.0f);
-            g.setFont (theme::font (13.0f, true));
-            g.setColour (theme::sung);
+            g.setColour (colours::glass.withAlpha (0.85f));
+            g.fillRoundedRectangle (chip, 5.0f);
+            g.setFont (ui::lcdFont (13.0f, juce::Font::bold));
+            g.setColour (pitchcolours::sung);
             g.drawText (readoutIn, chip.withTrimmedLeft (10.0f).withWidth (80.0f), juce::Justification::centredLeft);
-            g.setColour (theme::dim);
+            g.setColour (colours::dim);
             g.drawText (juce::String (juce::CharPointer_UTF8 ("\xe2\x86\x92")), chip.withTrimmedLeft (86.0f).withWidth (22.0f), juce::Justification::centred);
-            g.setColour (theme::accent);
+            g.setColour (pitchcolours::corrected);
             g.drawText (readoutOut, chip.withTrimmedLeft (112.0f), juce::Justification::centredLeft);
         }
+
+        ui::hw::drawGlassOverlay (g, full, 6.0f, true);
     }
 
 private:
     static constexpr float kSemitonesShown = 16.0f;
+
+    static juce::PathStrokeType stroke (float width) { return { width, juce::PathStrokeType::curved, juce::PathStrokeType::rounded }; }
 
     static juce::String noteName (int midi)
     {
@@ -136,12 +136,12 @@ private:
             prevIn = h.inMidi;
         }
 
-        g.setColour (theme::sung.withAlpha (0.85f));
-        g.strokePath (sungPath, theme::stroke (1.6f));
-        g.setColour (theme::accent.withAlpha (0.18f));
-        g.strokePath (outPath, theme::stroke (7.0f));
-        g.setColour (theme::accent);
-        g.strokePath (outPath, theme::stroke (2.4f));
+        g.setColour (pitchcolours::sung.withAlpha (0.85f));
+        g.strokePath (sungPath, stroke (1.6f));
+        g.setColour (pitchcolours::corrected.withAlpha (0.18f));
+        g.strokePath (outPath, stroke (7.0f));
+        g.setColour (pitchcolours::corrected);
+        g.strokePath (outPath, stroke (2.4f));
     }
 
     void timerCallback() override

@@ -20,7 +20,9 @@ const Preset kPresets[3] = {
     { "Hard-tune",  0.0f, 100.0f,  0.0f },
 };
 
-constexpr int kKnobX = 190, kKnobW = 111, kKnobTop = 396, kNumKnobs = 6;
+constexpr int kKnobX = 190, kKnobW = 111, kKnobTop = 412, kKnobH = 140, kNumKnobs = 6;
+constexpr int kRowTop = 96, kRowH = 292;       // the graph and the key module
+constexpr int kStyleTop = 400, kStyleH = 168;  // the style and knob module
 } // namespace
 
 HarmoniaEditor::HarmoniaEditor (HarmoniaProcessor& p)
@@ -36,7 +38,7 @@ HarmoniaEditor::HarmoniaEditor (HarmoniaProcessor& p)
                  "Pick your voice type. It narrows the pitch search so tracking is faster and never jumps an octave.");
 
     bypassButton.setClickingTogglesState (true);
-    bypassButton.getProperties().set ("warn", true);
+    bypassButton.setColour (juce::TextButton::buttonOnColourId, colours::warn);
     bypassButton.setTooltip ("Hear your vocal untouched (still delayed by the plug-in latency, so it stays in time).");
     content.addAndMakeVisible (bypassButton);
     bypassAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (proc.apvts, ids::bypass, bypassButton);
@@ -57,8 +59,8 @@ HarmoniaEditor::HarmoniaEditor (HarmoniaProcessor& p)
 
     detectedText = "Not sure of the key? Sing a phrase and let Harmonia find it.";
     statusLabel.setJustificationType (juce::Justification::topLeft);
-    statusLabel.setColour (juce::Label::textColourId, theme::dim);
-    statusLabel.setFont (theme::font (12.0f));
+    statusLabel.setColour (juce::Label::textColourId, colours::dim);
+    statusLabel.setFont (ui::font (12.0f));
     content.addAndMakeVisible (statusLabel);
 
     keyboard.onToggle = [this] (int pc) { toggleNote (pc); };
@@ -79,17 +81,17 @@ HarmoniaEditor::HarmoniaEditor (HarmoniaProcessor& p)
     presetButtons[2].setTooltip ("Instant snapping: the robotic T-Pain style effect.");
 
     // ---- knobs ----
-    setupKnob (knobs[0], ids::speed, "SPEED",
+    setupKnob (0, ids::speed, "SPEED",
                "How fast the voice is pulled onto the note. Instant = robotic effect. 20-60 ms is transparent, higher is looser.");
-    setupKnob (knobs[1], ids::strength, "STRENGTH",
+    setupKnob (1, ids::strength, "STRENGTH",
                "How much correction is applied. 100% = fully on the note. Lower keeps more of your own pitch.");
-    setupKnob (knobs[2], ids::natural, "NATURAL",
+    setupKnob (2, ids::natural, "NATURAL",
                "Keeps your own vibrato and expression. 100% = all of it. 0% = flattened onto the note.");
-    setupKnob (knobs[3], ids::hold, "NOTE HOLD",
+    setupKnob (3, ids::hold, "NOTE HOLD",
                "How long the voice has to stay near a new note before Harmonia moves to it. Higher stops the correction flickering to a wrong neighbouring note. 0 = switch at once.");
-    setupKnob (knobs[4], ids::formant, "FORMANT",
-               "Changes the vocal character (throat size) without changing pitch. Leave at 0 for your natural voice.", true);
-    setupKnob (knobs[5], ids::tuning, "TUNING (A4)",
+    setupKnob (4, ids::formant, "FORMANT",
+               "Changes the vocal character (throat size) without changing pitch. Leave at 0 for your natural voice.");
+    setupKnob (5, ids::tuning, "TUNING (A4)",
                "Reference pitch for A4. Change it if the song is not tuned to 440 Hz.");
 
     setResizable (true, true);
@@ -97,7 +99,7 @@ HarmoniaEditor::HarmoniaEditor (HarmoniaProcessor& p)
     getConstrainer()->setFixedAspectRatio ((double) kDesignW / (double) kDesignH);
     setSize (kDesignW, kDesignH);
 
-    subtitle = makeSubtitle();
+    latencyText = makeLatencyText();
     startTimerHz (20);
 }
 
@@ -117,21 +119,11 @@ void HarmoniaEditor::setupChoice (juce::ComboBox& box, std::unique_ptr<ComboAtta
     attachment = std::make_unique<ComboAttachment> (proc.apvts, id, box);
 }
 
-void HarmoniaEditor::setupKnob (Knob& k, const char* id, const juce::String& title, const juce::String& tip, bool bipolar)
+void HarmoniaEditor::setupKnob (int index, const char* id, const juce::String& title, const juce::String& tip)
 {
-    k.title = title;
-    content.addAndMakeVisible (k.slider); // join the hierarchy first so the text box picks up our look-and-feel
-    k.slider.setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag);
-    k.slider.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 100, 22);
-    k.slider.setRotaryParameters (juce::MathConstants<float>::pi * 1.25f, juce::MathConstants<float>::pi * 2.75f, true);
-    k.slider.setTooltip (tip);
-    k.slider.getProperties().set ("bipolar", bipolar);
-    k.slider.setPopupDisplayEnabled (false, false, nullptr);
-    k.attachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (proc.apvts, id, k.slider);
-
-    if (auto* param = proc.apvts.getParameter (id))
-        if (param->getLabel().isNotEmpty())
-            k.slider.setTextValueSuffix (" " + param->getLabel());
+    auto& k = knobs[(size_t) index];
+    k = std::make_unique<ui::Knob> (proc.apvts, id, title, tip, ui::Knob::Layout::below);
+    content.addAndMakeVisible (*k);
 }
 
 void HarmoniaEditor::resized()
@@ -139,71 +131,56 @@ void HarmoniaEditor::resized()
     content.setBounds (0, 0, kDesignW, kDesignH);
     content.setTransform (juce::AffineTransform::scale ((float) getWidth() / (float) kDesignW));
 
-    rangeBox.setBounds (580, 18, 190, 30);
-    bypassButton.setBounds (784, 18, 76, 30);
+    rangeBox.setBounds (580, 36, 190, 28);
+    bypassButton.setBounds (784, 36, 76, 28);
 
-    graph.setBounds (20, 72, 560, 296);
+    graph.setBounds (20, kRowTop, 560, kRowH);
 
-    keyBox.setBounds (616, 110, 82, 28);
-    scaleBox.setBounds (706, 110, 138, 28);
-    detectButton.setBounds (616, 148, 146, 32);
-    autoKeyButton.setBounds (770, 148, 74, 32);
-    statusLabel.setBounds (616, 186, 228, 34);
-    keyboard.setBounds (616, 226, 228, 100);
+    keyBox.setBounds (616, kRowTop + 38, 82, 28);
+    scaleBox.setBounds (706, kRowTop + 38, 138, 28);
+    detectButton.setBounds (616, kRowTop + 76, 146, 32);
+    autoKeyButton.setBounds (770, kRowTop + 76, 74, 32);
+    statusLabel.setBounds (616, kRowTop + 114, 228, 34);
+    keyboard.setBounds (616, kRowTop + 154, 228, 100);
 
     for (int i = 0; i < 3; ++i)
-        presetButtons[i].setBounds (36, 424 + i * 40, 130, 32);
+        presetButtons[i].setBounds (36, kStyleTop + 40 + i * 40, 130, 32);
 
     for (int i = 0; i < kNumKnobs; ++i)
-        knobs[i].slider.setBounds (kKnobX + i * kKnobW + 9, kKnobTop + 20, kKnobW - 18, 126);
+        knobs[(size_t) i]->setBounds (kKnobX + i * kKnobW, kKnobTop, kKnobW, kKnobH);
 }
 
 void HarmoniaEditor::paintContent (juce::Graphics& g)
 {
-    g.fillAll (theme::bg);
+    namespace hw = ui::hw;
 
-    // header
-    g.setColour (theme::text);
-    g.setFont (theme::font (26.0f, true));
-    g.drawText ("Harmonia", 20, 12, 200, 32, juce::Justification::centredLeft);
-    g.setColour (theme::accent);
-    g.fillEllipse (20.0f + 126.0f, 24.0f, 7.0f, 7.0f);
-    g.setColour (theme::dim);
-    g.setFont (theme::font (12.5f));
-    g.drawText (subtitle, kSubtitleBounds, juce::Justification::centredLeft);
-    g.setFont (theme::font (11.0f, true));
-    g.setColour (theme::dim);
-    g.drawText ("VOICE", 520, 18, 54, 30, juce::Justification::centredRight);
+    hw::fillMetal (g, juce::Rectangle<float> (0.0f, 0.0f, (float) kDesignW, (float) kDesignH), colours::background);
+    hw::drawHeaderPlate (g, juce::Rectangle<float> (0.0f, 0.0f, (float) kDesignW, (float) kHeaderH));
+    hw::drawNameplate (g, kNameplateBounds, "Harmonia", "Pitch", "Natural pitch correction", singing, 21.0f);
 
-    auto card = [&] (juce::Rectangle<float> r) {
-        g.setColour (theme::panel);
-        g.fillRoundedRectangle (r, 10.0f);
-        g.setColour (theme::panelEdge);
-        g.drawRoundedRectangle (r.reduced (0.5f), 10.0f, 1.0f);
-    };
-    auto caption = [&] (const juce::String& t, int x, int y) {
-        g.setColour (theme::dim);
-        g.setFont (theme::font (11.0f, true));
-        g.drawText (t, x, y, 220, 16, juce::Justification::centredLeft);
-    };
+    hw::drawLabel (g, "Latency", { kLatencyBounds.getX() + 2, kLatencyBounds.getY() - 14, 90, 12 }, juce::Justification::left, colours::dim, 9.0f);
+    hw::drawGlass (g, kLatencyBounds.toFloat(), 3.0f, colours::amber);
+    g.setFont (ui::lcdFont (12.0f));
+    g.setColour (colours::amber);
+    g.drawText (latencyText, kLatencyBounds.reduced (6, 0), juce::Justification::centred);
+    hw::drawGlassOverlay (g, kLatencyBounds.toFloat(), 3.0f, false);
 
-    card ({ 600.0f, 72.0f, 260.0f, 296.0f });
-    caption ("KEY & SCALE", 616, 86);
-    g.setColour (theme::dim);
-    g.setFont (theme::font (11.0f));
-    g.drawText (keysLocked ? "The key follows your vocal" : "Click keys to allow or block notes", 616, 332, 228, 28, juce::Justification::centredLeft);
+    hw::drawLabel (g, "Voice", { rangeBox.getX() + 2, rangeBox.getY() - 14, 90, 12 }, juce::Justification::left, colours::dim, 9.0f);
 
-    card ({ 20.0f, 384.0f, 840.0f, 160.0f });
-    caption ("STYLE", 36, 400);
-    g.setColour (theme::panelEdge);
-    g.fillRect (180.0f, 400.0f, 1.0f, 128.0f);
+    // key and scale
+    hw::drawModule (g, juce::Rectangle<float> (600.0f, (float) kRowTop, 260.0f, (float) kRowH));
+    hw::drawLabel (g, "Key & scale", { 620, kRowTop + 12, 220, 16 }, juce::Justification::left, colours::text, 10.5f);
+    g.setColour (colours::dim);
+    g.setFont (ui::font (11.0f));
+    g.drawText (keysLocked ? "The key follows your vocal" : "Click keys to allow or block notes", 616, kRowTop + 258, 228, 28, juce::Justification::centredLeft);
 
-    for (int i = 0; i < kNumKnobs; ++i)
-    {
-        g.setColour (theme::dim);
-        g.setFont (theme::font (11.0f, true));
-        g.drawText (knobs[i].title, kKnobX + i * kKnobW, kKnobTop, kKnobW, 16, juce::Justification::centred);
-    }
+    // style and the knobs
+    hw::drawModule (g, juce::Rectangle<float> (20.0f, (float) kStyleTop, 840.0f, (float) kStyleH));
+    hw::drawLabel (g, "Style", { 40, kStyleTop + 14, 120, 16 }, juce::Justification::left, colours::text, 10.5f);
+    g.setColour (juce::Colours::black.withAlpha (0.6f)); // a groove between the presets and the knobs
+    g.fillRect (180.0f, (float) kStyleTop + 16.0f, 1.0f, 136.0f);
+    g.setColour (juce::Colours::white.withAlpha (0.07f));
+    g.fillRect (181.0f, (float) kStyleTop + 16.0f, 1.0f, 136.0f);
 }
 
 // ---- parameter helpers ---------------------------------------------------------------
@@ -271,7 +248,7 @@ void HarmoniaEditor::timerCallback()
     if (following != keysLocked)
     {
         keysLocked = following;
-        content.repaint (616, 332, 228, 28);
+        content.repaint (616, kRowTop + 258, 228, 28);
     }
     keyBox.setEnabled (! autoKey && usesRoot);
     scaleBox.setEnabled (! autoKey);
@@ -320,21 +297,25 @@ void HarmoniaEditor::timerCallback()
     }
 
     // The latency readout only changes when the host (re)prepares the plug-in.
-    const auto text = makeSubtitle();
-    if (text != subtitle)
+    const auto text = makeLatencyText();
+    if (text != latencyText)
     {
-        subtitle = text;
-        content.repaint (kSubtitleBounds);
+        latencyText = text;
+        content.repaint (kLatencyBounds);
+    }
+
+    if (const bool nowSinging = graph.singingPitchClass() >= 0; nowSinging != singing)
+    {
+        singing = nowSinging;
+        content.repaint (kNameplateBounds);
     }
 }
 
-juce::String HarmoniaEditor::makeSubtitle() const
+juce::String HarmoniaEditor::makeLatencyText() const
 {
-    juce::String text ("Natural pitch correction");
-    if (proc.engineReady())
-    {
-        const int latencyMs = juce::roundToInt (1000.0 * proc.getLatencySamples() / juce::jmax (1.0, proc.getSampleRate()));
-        text << "   |   latency " << latencyMs << " ms";
-    }
-    return text;
+    if (! proc.engineReady())
+        return "--";
+
+    const int latencyMs = juce::roundToInt (1000.0 * proc.getLatencySamples() / juce::jmax (1.0, proc.getSampleRate()));
+    return juce::String (latencyMs) + " ms";
 }

@@ -22,8 +22,12 @@ plugins/<name>/  one self-contained plugin each: its own CMakeLists.txt, core/, 
 
 ## shared/ui
 
+- All three plugins draw with it (Themis, Hephaestus, Harmonia); nothing in a plugin draws its own panel, lamp, knob, button,
+  selector or nameplate. What a plugin adds on top is small and lives in it (`ThemisUi.h`, `HephaestusUi.h`, `HarmoniaUi.h`: its
+  words, its verdict or mode colours). A plugin's own namespaces must not be called `ui`, which is the kit's.
 - It owns every pixel of the interface: [Hardware.h](shared/ui/include/pantheon/ui/Hardware.h) (`colours::`, fonts, `ui::hw`
-  panels, glass, lamps, buttons, knobs), [HardwareLookAndFeel.h](shared/ui/include/pantheon/ui/HardwareLookAndFeel.h) and
+  panels, glass, lamps, buttons, knobs, the header plate and the nameplate), [HardwareLookAndFeel.h](shared/ui/include/pantheon/ui/HardwareLookAndFeel.h),
+  [Controls.h](shared/ui/include/pantheon/ui/Controls.h) (the parameter-bound `Knob` and `Choice`) and
   [MeterCell.h](shared/ui/include/pantheon/ui/MeterCell.h). Plugins call them; they do not draw their own panels, lamps or
   buttons. The namespaces (`colours`, `ui`, `ui::hw`) are kept short on purpose.
 - Everything is drawn from code: no image or font files, nothing random at run time.
@@ -48,8 +52,6 @@ plugins/<name>/  one self-contained plugin each: its own CMakeLists.txt, core/, 
 
 Delete an item here when it is done; this list is the only place that says what is left.
 
-- **Interface.** Decided: all plugins share the hardware look of `shared/ui`. Hephaestus (`Look.h`) and Harmonia (`Theme.h`)
-  still draw their own.
 - **Installing on build.** Both set `COPY_PLUGIN_AFTER_BUILD TRUE` unconditionally, so building a plugin target copies it into
   `~/Library/Audio/Plug-Ins`. Themis makes this an option (`THEMIS_INSTALL_AFTER_BUILD`), which CI relies on.
 - **CI** builds and tests Themis only.
