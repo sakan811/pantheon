@@ -156,7 +156,7 @@ void HarmoniaEditor::paintContent (juce::Graphics& g)
 
     hw::fillMetal (g, juce::Rectangle<float> (0.0f, 0.0f, (float) kDesignW, (float) kDesignH), colours::background);
     hw::drawHeaderPlate (g, juce::Rectangle<float> (0.0f, 0.0f, (float) kDesignW, (float) kHeaderH));
-    hw::drawNameplate (g, kNameplateBounds, "Harmonia", "Pitch", "Natural pitch correction", singing, 21.0f);
+    hw::drawNameplate (g, kNameplateBounds, words::kProjectWord, words::kPluginWord, "Natural pitch correction", singing, 21.0f);
 
     hw::drawLabel (g, "Latency", { kLatencyBounds.getX() + 2, kLatencyBounds.getY() - 14, 90, 12 }, juce::Justification::left, colours::dim, 9.0f);
     hw::drawGlass (g, kLatencyBounds.toFloat(), 3.0f, colours::amber);

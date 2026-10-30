@@ -61,6 +61,7 @@ static int selftest()
     setParam (proc, ids::natural, 0.0f);
 
     std::printf ("Processor + parameters\n");
+    check (proc.getName() == juce::String (words::kProjectWord) + " " + words::kPluginWord, "the reported name is the nameplate's two words", 0.0);
     check (proc.currentNoteMask() == harmonia::scaleMask (9, harmonia::kMajorScale), "A major mask from parameters", proc.currentNoteMask());
 
     auto voice = [&] (double midi) {

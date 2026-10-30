@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-Hephaestus: a JUCE 8 mastering saturator (VST3 / AU / Standalone, macOS). The user draws up to six
+Hephaestus Forge: a JUCE 8 mastering saturator (VST3 / AU / Standalone, macOS). The user draws up to six
 bands over the spectrum; each is either **Saturate** or **Harmonic Fill** (an adaptive, missing-fundamental
 style harmonic generator). See `README.md` for what it does and the research behind it; this file is what
 you need to change it safely.
@@ -15,7 +15,7 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=Release     # fetches JUCE (version in cm
 cmake --build build --target HephaestusTests -j 10 && ./build/HephaestusTests_artefacts/Release/HephaestusTests
 cmake --build build --target Hephaestus_VST3 Hephaestus_AU Hephaestus_Standalone -j 10
 cmake --build build --target HephaestusUiCheck && ./build/HephaestusUiCheck_artefacts/Release/HephaestusUiCheck
-cmake --build build --target HephaestusHostCheck && ./build/HephaestusHostCheck_artefacts/Release/HephaestusHostCheck ~/Library/Audio/Plug-Ins/VST3/Hephaestus.vst3
+cmake --build build --target HephaestusHostCheck && ./build/HephaestusHostCheck_artefacts/Release/HephaestusHostCheck "$HOME/Library/Audio/Plug-Ins/VST3/Hephaestus Forge.vst3"
 cmake --build build --target HephaestusSnapshot && ./build/HephaestusSnapshot_artefacts/Release/HephaestusSnapshot docs/screenshot.png "808 Sub Fill" sub 2
 auval -v aufx Hphs Hpha                             # Apple's AU validator
 ```
@@ -96,6 +96,7 @@ and `UiCheck` covers it. Never build a `juce::String` on the audio thread: look 
 - where a band really sits (minimum width, the 2 kHz fill limit), where its harmonics land (the zone the display shades) and which harmonics
   fit below Nyquist -> `effectiveRange()` / `harmonicSpan()` / `highestHarmonic()` / `harmonicReach()` (the adaptive measurement region) in `Band.h`
   (engine, spectrum view and tests all call them; test [5f] pins the span against measured energy)
+- the plugin's name ("Hephaestus Forge") -> `HEPHAESTUS_PLUGIN_NAME` in `CMakeLists.txt`, which reaches the code as `JucePlugin_Name`; the nameplate's two words are `hep::gui::kProjectWord` / `kPluginWord` in `UI/HephaestusUi.h` (`UiCheck` checks they agree)
 - band colours -> `hep::ui::forMode()` in `UI/HephaestusUi.h`
 - every pixel of the interface (panels, glass, lamps, knobs, buttons, fonts, the palette) -> `shared/ui`, shared with the other plugins (see the repository's [CLAUDE.md](../../CLAUDE.md)); the editor calls it and does not draw its own
 - knob id / caption / tooltip / panel membership -> `knobSpecs` and `panelSpecs` (character, master) and `bandKnobSpecs` (the six slots that follow the selected band) in `PluginEditor.cpp`

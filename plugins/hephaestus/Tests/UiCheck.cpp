@@ -56,6 +56,8 @@ int main()
     gui::SpectrumView view (proc.engine, proc.apvts, proc.currentSampleRate);
     view.setBounds (0, 0, viewWidth, viewHeight);
 
+    check (proc.getName() == juce::String (gui::kProjectWord) + " " + gui::kPluginWord, "the reported name is the nameplate's two words");
+
     std::printf ("\nBand slots\n");
     check (isBandOn (proc.apvts, 0) && ! isBandOn (proc.apvts, 1), "a fresh plugin has one band (a gentle full-range saturator)");
 

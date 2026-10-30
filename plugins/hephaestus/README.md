@@ -1,24 +1,53 @@
-# Hephaestus — harmonic forge for mastering
+# Hephaestus Forge
 
-A saturation plugin (VST3 / AU / Standalone, macOS universal) that fills in harmonics and
-missing fundamentals for tonal balance. Built with JUCE 8 for FL Studio (VST3/AU on macOS).
+A **harmonic forge for mastering** (VST3 + AU + Standalone) that fills in harmonics and missing fundamentals for tonal
+balance: you draw bands over the spectrum, and each one either saturates what is inside it or adds only the harmonics that
+are missing above it.
 
-![Hephaestus editor](docs/screenshot.png)
+## Name origin
 
-*An 808-style sub note (52 Hz) with nothing above it, in the "808 Sub Fill" preset. Band 2 (teal) is a Harmonic Fill band: the dim input trace has no energy above the note, the cream output has grown harmonics at 104 and 156 Hz, and the band's tab reads FILL 85 % because that is how much of its Amount it is currently adding. The tinted zone under "HARMONICS ADDED" is where that band's harmonics land; "ADAPT LISTENS HERE" marks the region the adaptive fill measures.*
+*Hephaestus* is the Greek god of the forge, of metalworking and of the craftsmen's tools: the one who hammers a shape out of
+raw metal; *Forge* is what the plugin does to a master's spectrum, forging harmonics where the sound is thin. (CMake targets,
+namespaces and plugin codes use the short name "Hephaestus".)
 
-You draw **bands** over the spectrum. Each band is one of two things:
+![Hephaestus Forge](docs/screenshot.png)
 
-| Band mode | What it does |
+*Headless render of the editor (the hardware-style interface shared with the other plugins) on an 808-style sub note (52 Hz) with nothing above it, in the "808 Sub Fill" preset. Band 2 (teal) is a Harmonic Fill band: the dim input trace has no energy above the note, the cream output has grown harmonics at 104 and 156 Hz, and the band's tab reads FILL 85 % because that is how much of its Amount it is currently adding. The tinted zone under "HARMONICS ADDED" is where that band's harmonics land; "ADAPT LISTENS HERE" marks the region the adaptive fill measures. Regenerate with the command under "Development".*
+
+## Core philosophy
+
+- **A band adds only what you ask for.** A Saturate band shapes a band-passed copy of the signal and sums only the *difference*
+  (what the shaper added) onto the untouched, latency-matched input. Nothing outside the bands is filtered, so bands can
+  overlap or leave gaps, and the plugin is exactly transparent at small signal for any arrangement.
+- **Fill what is missing, not what is already there.** Harmonic Fill measures the *input* and generates only the shortfall
+  against the amount you set, so the balance holds from one moment to the next instead of piling harmonics onto passages
+  that already have them. There is no feedback loop to destabilise.
+- **Exact where it can be, honest where it cannot.** The harmonics are weighted exactly (Chebyshev polynomials of the band
+  signal divided by its own envelope), aliasing is controlled by ADAA inside linear-phase oversampling, and every claim in
+  this README is a measurement from the test suite. Where something is a heuristic, the [Limitations](#limitations) say so.
+- **Made for judging, with mastering tools in reach.** **Delta** (hear only what the plugin adds), **Gain Match**
+  (loudness-matched A/B), **Mid/Side** mode, a latency-compensated **Mix** and a live input-vs-output spectrum, so more
+  saturation is not mistaken for "better".
+- **Analog look, digital brain.** The interface is a piece of studio hardware drawn entirely from code by the kit shared
+  with the other plugins ([shared/ui](../../shared/ui)): no image, font or sound files are shipped.
+- **Free, public, source only.** The repository holds the code, not a download, under the AGPL-3.0-or-later (see
+  [License](#license) and [Terms of use](#terms-of-use)).
+
+## Features
+
+| Area | What it does |
 |---|---|
-| **Saturate** (amber) | Drives the sound inside the band into a waveshaper (ADAA + linear-phase oversampling), so harmonics appear above it. Per-band Drive; Curve and Even are shared. Anything outside the band is left exactly as it is. |
-| **Harmonic Fill** (teal) | Adds harmonics (H2-H5) of the band's content *above* the band, but only as many as are missing. The energy just above the band is measured against the band's own, and only the shortfall to **Amount** is generated, so the balance holds from one moment to the next instead of piling harmonics onto passages that already have them. Optionally **Rebuild** also regenerates a fundamental that is physically missing while its harmonics are present (difference tone, 3f - 2f = f). |
+| **Bands** | Up to six bands, any ranges, overlapping or not. Double-click the spectrum where you want one and choose *Saturate* or *Harmonic Fill*, or use the buttons in the band panel; drag a band's edges to resize it and its body to move it; right-click it to change its mode or remove it. Each band has its own **Low** / **High** edge (20 Hz – 20 kHz; a fill band stops at 2 kHz, and an edge can't come closer than a ratio of 1.5). Bands fade in and out over one block when they are added or removed, and a removed band costs no CPU. |
+| **Saturate band** (amber) | Drives the sound inside the band into a waveshaper (ADAA + linear-phase oversampling), so harmonics appear above it. Per-band **Drive**; **Curve** and **Even** are shared. Anything outside the band is left exactly as it is. **Drive** is how hard the band is driven into the curve; small signals stay untouched whatever the drive. **Curve**: Tanh (smooth), Atan (open, tape-like) or Soft (algebraic, gritty, strongest upper odd harmonics). **Even**: 0 % = symmetric curve, odd harmonics only (3rd, 5th…); higher = asymmetric, adds 2nd, 4th… (tube-like). |
+| **Harmonic Fill band** (teal) | Adds harmonics (H2–H5) of the band's content *above* the band, but only as many as are missing. The energy just above the band is measured against the band's own, and only the shortfall to **Amount** is generated (see [Why Harmonic Fill is adaptive](#why-harmonic-fill-is-adaptive)). **Amount**: harmonic energy above the band relative to the band's own, in dB; also what Adapt aims to keep there; off at the minimum. **Tone**: which harmonics carry that energy: dark = mostly the 2nd; middle = the usual virtual-bass roll-off (−3 / −9 / −16 dB for H3 / H4 / H5 re H2); bright = led by the 3rd. The four weights always carry unit energy, so Amount means the same at any tone. **Adapt**: 0 % = a fixed amount, 100 % = only what is missing. **Rebuild** also regenerates a fundamental that is physically missing while its harmonics are present (difference tone, 3f − 2f = f), and only where it is missing; off by default and experimental on dense material. |
+| **Where the harmonics land** | Both kinds show where they add harmonics: the selected band gets a bracketed zone labelled **HARMONICS ADDED**, from the 2nd harmonic of its Low edge to the 5th of its High edge (stopping short of Nyquist, and for a fill band short of any harmonic that would alias); every other band shows it as a faint tint. A fill band with Amount off adds none and shows none. |
+| **Spectrum analyzer** | Live input-vs-output spectrum that follows FabFilter Pro-Q's: an 8192-point FFT, **4.5 dB/oct tilt around 1 kHz** by default (so typical programme material looks flat), a 90 dB range, fast attack and a selectable release. Right-click empty space in it for Range (60 / 90 / 120 dB), Speed and Tilt (0 / 3 / 4.5 / 6 dB/oct); the choice is saved with the project. |
+| **Delta / Gain Match / Mix** | **Delta** plays only what the plugin adds (wet − dry). **Gain Match** is a slow (~0.6 s) RMS match, clamped to ±12 dB, for a loudness-matched A/B; it is off by default. **Mix** is latency-compensated: 0 is the input delayed by exactly the reported latency. |
+| **Stereo mode** | **Mid/Side** saturates M and S; fill bands then work on Mid only so bass stays centred. |
+| **Oversampling** | Off / 2× / 4× / 8×, linear-phase; 4× is the default. Latency is reported to the host and changes with this setting. |
+| **Presets** | Eight, including *808 Sub Fill*, *Missing Fundamental*, *Small-Speaker Bass*, *Master Glue*, *Warm Tube*, *Tape Body* and *Air Exciter* (see [Using it](#using-it)). |
 
-Both kinds show where they add harmonics: the selected band gets a bracketed zone labelled **HARMONICS ADDED**, from the 2nd harmonic of its Low edge to the 5th of its High edge (stopping short of Nyquist, and for a fill band short of any harmonic that would alias); every other band shows it as a faint tint. A fill band with Amount off adds none and shows none.
-
-Up to six bands, any ranges, overlapping or not. Mastering tools: **Delta** (hear only what the plugin adds), **Gain Match** (loudness-matched A/B), **Mid/Side** mode, **Mix** (latency-compensated), and a live **input-vs-output spectrum**. The analyzer follows FabFilter Pro-Q's: an 8192-point FFT, **4.5 dB/oct tilt around 1 kHz** by default, a 90 dB range, fast attack and a selectable release. Right-click empty space in it for Range (60/90/120 dB), Speed and Tilt (0/3/4.5/6 dB/oct); the choice is saved with the project.
-
-## Why Harmonic Fill is adaptive
+### Why Harmonic Fill is adaptive
 
 A tonal-balance EQ fixes the *average* curve. It cannot fix a mix whose curve looks balanced but whose energy is not: a sub note with nothing above it, a bar where the low mids go empty, a section where they are full. Boosting those regions with an EQ lifts whatever happens to be there, and a fixed-amount harmonic generator adds the same harmonics whether or not they are already present. Harmonic Fill closes the loop instead:
 
@@ -30,38 +59,11 @@ shortfall          s   = 1 - min (1, E_a / E_w)
 gain on harmonics  g   = (1 - Adapt) + Adapt x sqrt (s)       (smoothed over ~50 ms)
 ```
 
-The measurement is made on the *input*, so there is no feedback to destabilise. **Adapt 0 %** is the old fixed-amount behaviour; **Adapt 100 %** adds only the shortfall. The harmonics are generated with exact weights (Chebyshev polynomials of the band signal divided by its own envelope, see below), so a hollow passage gets precisely `Amount` of harmonic energy and a full one gets none. This was measured (see Verification): at Amount -6 dB a hollow passage gets **-6.3 dB** of added energy relative to the band, a passage that already has plenty above the band gets **nothing**, and a quarter-filled one gets 0.76 of the full amount where the law predicts 0.80.
+The measurement is made on the *input*, so there is no feedback to destabilise. **Adapt 0 %** is the old fixed-amount behaviour; **Adapt 100 %** adds only the shortfall. The harmonics are generated with exact weights (Chebyshev polynomials of the band signal divided by its own envelope, see below), so a hollow passage gets precisely `Amount` of harmonic energy and a full one gets none. This was measured (see [What has and hasn't been verified](#what-has-and-hasnt-been-verified)): at Amount −6 dB a hollow passage gets **−6.3 dB** of added energy relative to the band, a passage that already has plenty above the band gets **nothing**, and a quarter-filled one gets 0.76 of the full amount where the law predicts 0.80.
 
 What it does *not* do: it judges "already there" by energy in a fixed region above the band, not by whether that energy is musically the right harmonics. Dense material above the band will make it back off. Raise Amount to ask for more energy above the band, lower Adapt to add regardless.
 
-## Using it in FL Studio
-
-1. FL Studio -> *Options -> Manage plugins* -> *Find plugins* (the VST3 is installed in
-   `~/Library/Audio/Plug-Ins/VST3/Hephaestus.vst3`).
-2. Put it on the master (or a bus) **before** the limiter. Latency (shown by FL as PDC) is
-   reported automatically; it changes with the Oversampling setting.
-3. **Make bands.** Double-click the spectrum where you want one and choose *Saturate* or *Harmonic Fill*, or use the buttons in the band panel. Drag a band's edges to resize it, its body to move it; right-click it to change its mode or remove it. The band panel below shows the selected band's controls; the numbered chips pick a band.
-4. **Or start from a preset:**
-   - **Thin or small-speaker bass:** *Missing Fundamental* or *Small-Speaker Bass*. Put a Harmonic Fill band over the fundamentals you want to support. Watch the FILL % on its tab and confirm with **Delta**.
-   - **808 / sub that disappears on laptops:** *808 Sub Fill*.
-   - **Glue and warmth:** *Master Glue* / *Warm Tube* / *Tape Body*. Use **Gain Match** so more saturation isn't mistaken for "better".
-   - **Dull top end:** *Air Exciter* (a saturate band over the highs; harmonics land above it).
-5. Judge with **Delta** and with the analyzer. The display is tilted +4.5 dB/oct (as Pro-Q's default) so typical programme material looks flat.
-
-### Parameter guide
-
-Every band has its own **Low** / **High** edge (20 Hz - 20 kHz; a fill band stops at 2 kHz, and an edge can't come closer than a ratio of 1.5).
-
-- **Saturate - Drive** - how hard the band is driven into the curve. Small signals stay untouched whatever the drive.
-- **Curve / Even** (shared by all saturate bands) - Even 0 % = symmetric curve -> odd harmonics only (3rd, 5th...); higher = asymmetric -> adds 2nd, 4th... (tube-like). Curves: Tanh (smooth), Atan (open, tape-like), Soft (algebraic, gritty, strongest upper odd harmonics).
-- **Fill - Amount** - harmonic energy above the band relative to the band's own, in dB; also what Adapt aims to keep there. Off at the minimum.
-- **Fill - Tone** - which harmonics carry that energy: dark = mostly the 2nd; middle = the usual virtual-bass roll-off (-3 / -9 / -16 dB for H3 / H4 / H5 re H2); bright = led by the 3rd. The four weights always carry unit energy, so Amount means the same at any tone.
-- **Fill - Adapt** - see above. 100 % = only what is missing.
-- **Fill - Rebuild** - regenerates a fundamental that is missing inside the band from the difference tone of the harmonics that are present, and only where it is missing. Off by default; experimental on dense material.
-- **Oversampling** - Off / 2x / 4x / 8x, linear-phase. 4x is the default.
-- **Stereo mode** - Mid/Side saturates M and S; fill bands then work on Mid only so bass stays centred.
-
-## Research this is based on
+### Research this is based on
 
 - **Missing fundamental / virtual bass.** Larsen & Aarts' book *Audio Bandwidth Extension* (Wiley, 2004) frames the nonlinear-device (NLD) approach; Bai & Lin (JAES 2006) introduced phase-vocoder virtual bass; Mu, Gan & Tan (ICASSP 2012) and Hill & Hawksford (2010) built hybrids. The trade-off reported in that literature: **NLDs keep transients but give no control over individual harmonics; phase vocoders give precise harmonic weighting but smear transients.** Overview via [Eloi et al., DAFx 2020](https://acris.aalto.fi/ws/portalfiles/portal/51973173/Eloi2020_Virtual_bass_DAFx2020.pdf).
   → *Hephaestus' answer:* divide the bass band by its own envelope, apply Chebyshev polynomials T2–T5, multiply the envelope back. For a unit sine, T*k* gives exactly the *k*-th harmonic (the weights are exact and level-independent), yet the processing stays in the time domain (no smearing). See [Csound `chebyshevpoly`](https://csound.com/manual/opcodes/chebyshevpoly/) and the [UW lecture notes](https://courses.cs.washington.edu/courses/cse490s/11au/lectures/E-Non-linearSynthesis.pdf).
@@ -70,7 +72,7 @@ Every band has its own **Low** / **High** edge (20 Hz - 20 kHz; a fill band stop
 - **Host behaviour.** Latency changes must be reported from the message thread ([JUCE forum](https://forum.juce.com/t/bug-setlatencysamples-crashes-ableton-live-10-vst3-fixed/40216)), and the legacy parameter API breaks VST3 automation ([JUCE forum](https://forum.juce.com/t/vst3-automation-with-legacy-parameter-handling-broken/44854)). → latency goes through an `AsyncUpdater`; all parameters use the versioned `ParameterID` API.
 - **Even vs odd harmonics.** Sources disagree on which sounds "warmer" ([iZotope](https://www.izotope.com/en/learn/what-is-audio-saturation) vs. a [CreativeLive/Ozone lesson](https://phoenix.creativelive.com/class/mastering-music-with-izotope-ozone-11-tomas-george/lessons/saturation-vintage-tape-module-and-exciter-module)), so Even is a continuous control rather than fixed "tube/tape" types. Trust your ears and Delta.
 
-## Signal flow
+### Signal flow
 
 ```
 in -> gain -+- dry (delayed by latency) ------------------------------------------------------+
@@ -86,11 +88,90 @@ Details that matter:
 - **The fundamental engine runs at the host rate**: a fill band's range stops at 2 kHz, so its harmonics stay well below Nyquist (a harmonic that would land above 0.48 x fs is dropped) and there is nothing to alias.
 - **The Chebyshev envelope releases slowly (`6 / lo`).** The k-th harmonic scales as `a^k` where `a` is the normalised amplitude, so envelope droop between waveform peaks costs accuracy mostly in H4/H5. Doubling the release from `3/lo` cut the worst-case error from 1.26 dB to 0.38 dB at 60 Hz, with harmonics still 48 dB down 50 ms after a note ends.
 - **Rebuild's gap detector** compares input vs restored energy per frequency in a bank of narrow resonators. Comparing against the whole band mistakes a 2nd harmonic for an existing fundamental, and correlating with the restored signal fails because a difference tone is in phase quadrature with the true fundamental of saw-like waveforms. Both were tried first and failed the test suite.
-- **Bands fade in and out** over one block when they are added or removed, and a removed band costs no CPU.
 
-## Verification (all run on the final binaries)
+## How to use
 
-`HephaestusTests` (headless DSP, `Tests/Tests.cpp`) - measured, not assumed:
+### Build and install (macOS)
+
+Hephaestus Forge is source only: you build it yourself. Formats: **VST3 + AU + Standalone** (macOS, universal arm64 + x86_64).
+
+```bash
+# SDKROOT works around Command Line Tools shipping an SDK this Xcode's linker can't read.
+export SDKROOT=$(xcrun --sdk macosx --show-sdk-path)
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release    # fetches JUCE (version in cmake/Juce.cmake); an offline copy in third_party/JUCE at the repository root is used if present
+cmake --build build --target Hephaestus_VST3 Hephaestus_AU Hephaestus_Standalone
+```
+
+Building the plugin targets **installs** them to `~/Library/Audio/Plug-Ins/{VST3,Components}` (the VST3 is
+`~/Library/Audio/Plug-Ins/VST3/Hephaestus Forge.vst3`). Then rescan plugins in your host; in FL Studio that is *Options → Manage
+plugins → Find plugins*. The binary is ad-hoc signed, which is enough for local use. Apple's validator checks the AU:
+
+```bash
+auval -v aufx Hphs Hpha
+```
+
+Builds are for your own use; if you hand one to somebody else, see [Terms of use](#terms-of-use).
+
+### Using it
+
+1. **Put it on the master (or a bus) before the limiter.** Latency (shown by FL as PDC) is reported automatically; it changes
+   with the Oversampling setting.
+2. **Make bands.** Double-click the spectrum where you want one and choose *Saturate* or *Harmonic Fill*, or use the buttons
+   in the band panel. Drag a band's edges to resize it, its body to move it; right-click it to change its mode or remove it.
+   The band panel below shows the selected band's controls; the numbered chips pick a band.
+3. **Or start from a preset:**
+   - **Thin or small-speaker bass:** *Missing Fundamental* or *Small-Speaker Bass*. Put a Harmonic Fill band over the fundamentals you want to support. Watch the FILL % on its tab and confirm with **Delta**.
+   - **808 / sub that disappears on laptops:** *808 Sub Fill*.
+   - **Glue and warmth:** *Master Glue* / *Warm Tube* / *Tape Body*. Use **Gain Match** so more saturation isn't mistaken for "better".
+   - **Dull top end:** *Air Exciter* (a saturate band over the highs; harmonics land above it).
+4. **Judge with Delta and with the analyzer.** The display is tilted +4.5 dB/oct by default so typical programme material looks
+   flat.
+
+## Development
+
+Built with [JUCE](https://juce.com) 8. All DSP lives in `Source/DSP`, which has no GUI dependencies and is covered by
+`Tests/Tests.cpp`; the plugin layer only draws and wires it up. See [CLAUDE.md](CLAUDE.md) for the design invariants and the
+single-source-of-truth map before changing anything.
+
+### Tests, screenshots and layout
+
+```bash
+cmake --build build --target HephaestusTests && ./build/HephaestusTests_artefacts/Release/HephaestusTests
+cmake --build build --target HephaestusUiCheck && ./build/HephaestusUiCheck_artefacts/Release/HephaestusUiCheck
+cmake --build build --target HephaestusHostCheck && ./build/HephaestusHostCheck_artefacts/Release/HephaestusHostCheck "$HOME/Library/Audio/Plug-Ins/VST3/Hephaestus Forge.vst3"
+cmake --build build --target HephaestusSnapshot && ./build/HephaestusSnapshot_artefacts/Release/HephaestusSnapshot docs/screenshot.png "808 Sub Fill" sub 2   # writes the README image
+```
+
+`docs/screenshot.png` is the output of that command, never edited by hand. It is regenerated after every change that touches
+the UI or what it shows, and its caption above is kept true to the demo (the rules for contributors are in [CLAUDE.md](CLAUDE.md)).
+
+Layout (the one file map; update it when a source file is added, renamed or removed):
+
+```
+Source/DSP/Band.h                band modes, range rules shared by engine and display
+Source/DSP/Biquad.h              double-precision biquads, Butterworth cascades, Bandpass pair
+Source/DSP/Waveshaper.h          tanh / atan / algebraic curves + residual ADAA
+Source/DSP/Saturator.h           user-placed saturate bands, per-band oversampling + shaping
+Source/DSP/FundamentalEngine.h   Chebyshev harmonics + adaptive fill + difference-tone rebuild + gap detector
+Source/DSP/Engine.h              latency alignment, band mixing, M/S, gain match, delta, meters
+Source/DSP/AnalyzerTap.h         lock-free FIFOs feeding the display
+Source/DSP/SpectrumAnalyzer.h    EQ-style FFT analyzer (GUI-free, unit-tested)
+Source/Parameters.h              parameter layout, presets, band helpers, legacy-session migration
+Source/PluginProcessor.*         JUCE wrapper
+Source/PluginEditor.*, UI/       band panel, spectrum view with draggable bands, HephaestusUi.h (band colours); the look itself is shared/ui
+../../shared/ui/                 the drawing kit of the interface, shared with the other plugins of the repository
+Tests/                           DSP tests, UI check, VST3 host check, editor snapshot, shared helpers
+docs/screenshot.png              editor render (generated by HephaestusSnapshot)
+```
+
+### Continuous integration
+
+CI does not build or test Hephaestus yet; the workflows in [.github/workflows](../../.github/workflows) cover Themis only (the
+state of that is tracked in the repository's [CLAUDE.md](../../CLAUDE.md)). Run the commands above before you rely on a change.
+
+### What has and hasn't been verified
+
+`HephaestusTests` (headless DSP, `Tests/Tests.cpp`) is measured, not assumed, and was run on the final binaries:
 
 | Check | Result |
 |---|---|
@@ -114,58 +195,37 @@ Details that matter:
 | 600 randomised blocks (all params incl. six random bands, block sizes 1-1500, mono/stereo, mode switches) | always finite |
 | CPU, 10 s stereo, six bands on (4 saturate, 2 adaptive fill with Rebuild) | 2 % (no OS) -> 15 % of one core (8x), Apple M4 |
 
-`HephaestusUiCheck` drives the real spectrum component with synthetic mouse events: a band added at 1 kHz takes the first free slot; clicking where bands overlap selects the narrowest; dragging an edge moves only that edge; dragging the body keeps the width ratio; an edge can't cross the minimum width; a fill band is pulled to at most 2 kHz; a full plugin refuses a seventh band and reuses a freed slot.
+| Verified | Not yet verified |
+|---|---|
+| **`HephaestusUiCheck`** drives the real spectrum component with synthetic mouse events: a band added at 1 kHz takes the first free slot; clicking where bands overlap selects the narrowest; dragging an edge moves only that edge; dragging the body keeps the width ratio; an edge can't cross the minimum width; a fill band is pulled to at most 2 kHz; a full plugin refuses a seventh band and reuses a freed slot | **Inside FL Studio itself.** It was validated through JUCE's VST3 host and `auval`; *pluginval* was not run (the sandbox blocked executing the downloaded binary). Load it in FL and report anything odd |
+| **`HephaestusHostCheck`** loads the installed **VST3** through JUCE's host wrapper: 5 sample rates (22.05-192 kHz) x 5 block sizes (1-4096) with every parameter randomised, latency reporting follows the oversampling choice (0 / 49 / 61 / 65 samples) and an impulse through the loaded plugin comes out exactly that many samples later, state and all 8 presets round-trip, and a session saved with the old fixed three-band layout loads as three saturate bands plus one fill band. Apple's `auval` passes for the **AU** | **The mouse interaction by hand in a DAW.** Dragging, the add/remove menus and the band panel are covered by `HephaestusUiCheck` and screenshots, but not by a person using them |
+| | Windows and Linux builds. JUCE is cross-platform, but they were not built or tested |
 
-`HephaestusHostCheck` loads the installed **VST3** through JUCE's host wrapper: 5 sample rates (22.05-192 kHz) x 5 block sizes (1-4096) with every parameter randomised, latency reporting follows the oversampling choice (0 / 49 / 61 / 65 samples) and an impulse through the loaded plugin comes out exactly that many samples later, state and all 8 presets round-trip, and a session saved with the old fixed three-band layout loads as three saturate bands plus one fill band. Apple's `auval` passes for the **AU**.
+## Limitations
 
-## Known limitations (honest list)
-
-- **Not yet tested inside FL Studio itself.** It was validated through JUCE's VST3 host and `auval`; *pluginval* was not run (the sandbox blocked executing the downloaded binary). Load it in FL and report anything odd.
-- **The mouse interaction has been checked with synthetic events, not by hand in a DAW.** Dragging, the add/remove menus and the band panel are covered by `HephaestusUiCheck` and screenshots, but not by a person using them.
 - **The adaptive fill judges "already there" by energy, not by harmonic content.** It compares the energy from 1.25 x High to 5.2 x High with the band's own; anything in that region counts, whether or not it is related to the band. On dense material it will often back off completely: that is the intended behaviour (the energy exists), but raise Amount or lower Adapt if you want it to add regardless. The Chebyshev weights are exact for sine-like band content; noise-like band content gives somewhat different harmonic energy, so the target is approximate there.
 - **Rebuild is experimental.** A squarer produces difference tones between *all* component pairs in its input band, so dense low-mid material can yield inharmonic bass content. It suits sparse bass material; leave it off for full mixes unless Delta says it helps.
 - **A saturate band shapes a band-passed copy** (4th-order Butterworth edges), and what the shaper added is summed onto the clean signal. Near a band's edges, where that copy's phase has turned, the shaper's gain reduction on the fundamental is applied with that phase. This was not measured separately; overlap bands or check with Delta if a band edge sits on something important.
-- **Gain Match** is a slow (~0.6 s) RMS match, clamped to +-12 dB. It will partly undo a deliberate bass boost, since low-end energy dominates RMS; that's why it's off by default.
+- **Gain Match** is a slow (~0.6 s) RMS match, clamped to ±12 dB. It will partly undo a deliberate bass boost, since low-end energy dominates RMS; that's why it's off by default.
 - **The analyzer's absolute level** uses a Hann window, so a sine falling between FFT bins reads up to 1.4 dB low. Its tilt and range options mirror Pro-Q's, but it is not a Pro-Q clone: Pro-Q's smoothing and peak-hold details are not published.
 - **Ad-hoc signed, not notarised.** Fine on this Mac. Distributing it needs a Developer ID signature and notarisation.
-- Windows/Linux builds should work (JUCE is cross-platform) but were not built or tested.
-
-## Build
-
-```bash
-# macOS. SDKROOT works around Command Line Tools shipping an SDK this Xcode's linker can't read.
-export SDKROOT=$(xcrun --sdk macosx --show-sdk-path)
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release    # fetches JUCE (version in cmake/Juce.cmake); an offline copy in third_party/JUCE at the repository root is used if present
-cmake --build build --target Hephaestus_VST3 Hephaestus_AU Hephaestus_Standalone   # installs to ~/Library/Audio/Plug-Ins
-cmake --build build --target HephaestusTests && ./build/HephaestusTests_artefacts/Release/HephaestusTests
-cmake --build build --target HephaestusHostCheck && ./build/HephaestusHostCheck_artefacts/Release/HephaestusHostCheck ~/Library/Audio/Plug-Ins/VST3/Hephaestus.vst3
-cmake --build build --target HephaestusUiCheck && ./build/HephaestusUiCheck_artefacts/Release/HephaestusUiCheck
-cmake --build build --target HephaestusSnapshot   # renders the editor to PNG
-```
-
-See `CLAUDE.md` for the design invariants and the single-source-of-truth map before changing anything.
-
-## Layout
-
-```
-Source/DSP/Band.h                band modes, range rules shared by engine and display
-Source/DSP/Biquad.h              double-precision biquads, Butterworth cascades, Bandpass pair
-Source/DSP/Waveshaper.h          tanh / atan / algebraic curves + residual ADAA
-Source/DSP/Saturator.h           user-placed saturate bands, per-band oversampling + shaping
-Source/DSP/FundamentalEngine.h   Chebyshev harmonics + adaptive fill + difference-tone rebuild + gap detector
-Source/DSP/Engine.h              latency alignment, band mixing, M/S, gain match, delta, meters
-Source/DSP/AnalyzerTap.h         lock-free FIFOs feeding the display
-Source/DSP/SpectrumAnalyzer.h    EQ-style FFT analyzer (GUI-free, unit-tested)
-Source/Parameters.h              parameter layout, presets, band helpers, legacy-session migration
-Source/PluginProcessor.*         JUCE wrapper
-Source/PluginEditor.*, UI/       band panel, spectrum view with draggable bands, HephaestusUi.h (band colours); the look itself is shared/ui
-Tests/                           DSP tests, UI check, VST3 host check, editor snapshot, shared helpers
-docs/screenshot.png              editor render (generated by HephaestusSnapshot)
-```
 
 ## License
 
-Free software under the **GNU Affero General Public License v3.0 or later** ([LICENSE](../../LICENSE)). It is built on
-[JUCE](https://juce.com) under the AGPLv3 option. This repository is source only: it publishes no binaries. Third-party
-components, trademarks and the build policy are in [NOTICE.md](../../NOTICE.md); how to suggest something is in
-[CONTRIBUTING.md](../../CONTRIBUTING.md) (suggestions are welcome, code contributions are not accepted).
+Hephaestus is free software, licensed under the **GNU Affero General Public License v3.0 or later** ([LICENSE](../../LICENSE)). It is
+built on [JUCE](https://juce.com), which is dual-licensed under the AGPLv3 and a commercial licence; Hephaestus uses the AGPLv3
+option, and JUCE is fetched when you configure the build and is not part of this repository. Third-party components,
+trademarks and the "source only" policy are described in [NOTICE.md](../../NOTICE.md). Hephaestus is maintained by one person:
+suggestions and bug reports are welcome as issues, code contributions are not accepted ([CONTRIBUTING.md](../../CONTRIBUTING.md)).
+
+## Terms of use
+
+- **Source only.** This repository contains the code, not a download, and publishes no binaries; releases are source only. Building and
+  using Hephaestus yourself is free (see [NOTICE.md](../../NOTICE.md) for the policy and the third-party components).
+- **Passing it on.** If you give a build to somebody else, the AGPL requires you to give them the corresponding source
+  (see [NOTICE.md](../../NOTICE.md)), because JUCE is licensed under the AGPLv3 or a commercial licence. macOS also quarantines a
+  copy that is not signed with a Developer ID certificate and notarised (`xattr -cr "Hephaestus Forge.vst3"` clears it for personal use).
+- **No warranty.** Hephaestus is provided "as is", without warranty of any kind. It is an audio effect: judge the result with
+  Delta and your ears, and check levels before you export.
+- **Trademarks.** Product and company names mentioned here belong to their owners and are used only to describe what Hephaestus
+  works with or what a statement is about; Hephaestus is not affiliated with or endorsed by any of them.

@@ -353,7 +353,7 @@ void HephaestusEditor::paint (juce::Graphics& g)
 
     hw::fillMetal (g, getLocalBounds().toFloat(), colours::background);
     hw::drawHeaderPlate (g, juce::Rectangle<float> (0.0f, 0.0f, (float) getWidth(), (float) headerHeight));
-    hw::drawNameplate (g, nameplate, "Hephaestus", "Forge", "Harmonic saturator", inLevel > 0.001f, 21.0f);
+    hw::drawNameplate (g, nameplate, gui::kProjectWord, gui::kPluginWord, "Harmonic saturator", inLevel > 0.001f, 21.0f);
 
     // Small captions above the header selectors.
     for (auto [box, caption] : { std::pair<juce::Component*, const char*> { &presetBox, "Preset" },

@@ -5,7 +5,7 @@
 // sample rates / block sizes, fuzz every parameter while processing, state + preset round trips,
 // latency reporting.
 //
-//   HephaestusHostCheck <path/to/Hephaestus.vst3>
+//   HephaestusHostCheck <path/to/Hephaestus Forge.vst3>
 
 #include "Check.h"
 #include <juce_audio_processors/juce_audio_processors.h>
