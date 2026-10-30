@@ -17,7 +17,8 @@ plugins/<name>/  one self-contained plugin each: its own CMakeLists.txt, core/, 
 - `shared/` knows nothing about any plugin: no plugin types, parameters, verdicts or words in it. What a plugin adds on top
   (its name, its number formats, its verdict colours) lives in that plugin; Themis' is `plugin/Source/ThemisUi.h`.
 - A plugin builds from its own folder with the commands in its README (`cmake -S . -B build` there); it pulls `shared/` in
-  by relative path. There is no root CMake project yet; add one when the second plugin joins.
+  by relative path. There is no root CMake project: each plugin fetches its own JUCE, and they pin different versions (see
+  below), which a single root project could not.
 
 ## shared/ui
 
@@ -38,3 +39,23 @@ plugins/<name>/  one self-contained plugin each: its own CMakeLists.txt, core/, 
 - Third-party code needs a compatible licence and an entry in that plugin's NOTICE.md. Nothing is merged into `plugins/` from
   another repository before its licence is known.
 - CI runs per plugin; workflows are SHA-pinned with read-only tokens. Do not add a release or artifact upload.
+
+## Not yet in line (Hephaestus and Harmonia were imported as they were)
+
+Delete an item here when it is done; this list is the only place that says what is left.
+
+- **Licence files.** Neither has a LICENSE, a NOTICE.md or SPDX / copyright headers. They are one author's work with no
+  third-party code or assets, so they follow the AGPL-3.0-or-later rule above; the headers wait on the repository-wide
+  copyright name.
+- **Interface.** Each draws its own look (`Look.h` in Hephaestus, `Theme.h` in Harmonia), not `shared/ui`. Whether they adopt
+  the hardware look is a design decision, not a refactor; until then the shared kit stays Themis-only in practice.
+- **JUCE version.** Themis pins 8.0.6, Hephaestus 8.0.16-security, Harmonia whatever its CMakeLists pins. One version for all
+  is the aim, and a precondition for a root CMake project.
+- **Installing on build.** Both set `COPY_PLUGIN_AFTER_BUILD TRUE` unconditionally, so building a plugin target copies it into
+  `~/Library/Audio/Plug-Ins`. Themis makes this an option (`THEMIS_INSTALL_AFTER_BUILD`), which CI relies on.
+- **CI** builds and tests Themis only.
+- **Naming other companies' products.** Two source comments in Hephaestus (`SpectrumAnalyzer.h`, `SpectrumView.h`) and its
+  README name a third-party product; the rule above (neutral, nominative, trademark note in NOTICE.md) is not applied yet.
+- **Shared DSP.** Not extracted on purpose: today only Themis uses its FFT, band grid and target curves, and the two real
+  duplicates (Hephaestus' own `Biquad`, and its spectrum analyser against Themis' `TonalAnalyzer`) differ in precision and
+  JUCE dependence. Extract when a second plugin actually needs the same code.
