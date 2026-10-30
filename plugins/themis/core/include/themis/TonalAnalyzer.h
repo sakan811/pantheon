@@ -359,9 +359,9 @@ private:
             }
             else
             {
-                const float p0 = pw[static_cast<size_t> (m.interpLo)];
-                const float p1 = pw[static_cast<size_t> (std::min (m.interpLo + 1, half))];
-                v = (p0 + (p1 - p0) * m.interpFrac) * m.binsWide;
+                const double p0 = pw[static_cast<size_t> (m.interpLo)];
+                const double p1 = pw[static_cast<size_t> (std::min (m.interpLo + 1, half))];
+                v = (p0 + (p1 - p0) * static_cast<double> (m.interpFrac)) * static_cast<double> (m.binsWide);
             }
             e[static_cast<size_t> (b)] = v;
             if (m.valid)
