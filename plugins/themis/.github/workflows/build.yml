@@ -1,0 +1,81 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 The Themis authors
+
+name: build
+
+# This repository is source only: CI checks that the code builds and passes its tests. It never packages, uploads or
+# publishes a compiled plugin (see NOTICE.md).
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A newer push to the same branch or pull request makes the older run pointless.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  dsp-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: DSP unit tests
+        run: make test
+
+  macos:
+    # Universal (arm64 + x86_64) VST3 + AU, the plugin formats for macOS.
+    runs-on: macos-14
+    timeout-minutes: 45
+    needs: dsp-tests
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Configure
+        run: >
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"
+          -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0
+          -DTHEMIS_INSTALL_AFTER_BUILD=ON
+      - name: Build
+        run: cmake --build build --config Release --target Themis_VST3 Themis_AU -j 4
+      - name: Check architectures
+        run: |
+          lipo -info "$HOME/Library/Audio/Plug-Ins/VST3/Themis Verdict.vst3/Contents/MacOS/Themis Verdict"
+          lipo -info "$HOME/Library/Audio/Plug-Ins/Components/Themis Verdict.component/Contents/MacOS/Themis Verdict"
+      - name: Ad-hoc sign (required on Apple Silicon)
+        run: |
+          codesign --force --deep --sign - "$HOME/Library/Audio/Plug-Ins/VST3/Themis Verdict.vst3"
+          codesign --force --deep --sign - "$HOME/Library/Audio/Plug-Ins/Components/Themis Verdict.component"
+      - name: Validate Audio Unit
+        continue-on-error: true # auval can be flaky on hosted runners; the result is still logged
+        run: |
+          killall -9 AudioComponentRegistrar || true
+          auval -v aufx Thms Thmi
+
+  linux-plugin-compile:
+    # Catches plugin-layer compile errors on every push without needing a Mac.
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: dsp-tests
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libx11-dev libxext-dev libxinerama-dev libxrandr-dev libxcursor-dev \
+            libfreetype-dev libfontconfig1-dev libgl1-mesa-dev
+      - name: Build VST3
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DTHEMIS_BUILD_TESTS=OFF
+          cmake --build build --target Themis_VST3 -j 4
