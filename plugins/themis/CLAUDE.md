@@ -54,7 +54,7 @@ The build, install, test and screenshot commands are in the README (**How to use
 - Other CMake options: `THEMIS_BUILD_PLUGIN`, `THEMIS_BUILD_TESTS` (both default ON), `THEMIS_BUILD_SMOKE` (OFF).
 - There is no linter or formatter config in the repo. The Makefile compiles tests with `-Wall -Wextra -Wpedantic -Wconversion`; the plugin target uses JUCE's recommended warning flags and is kept warning-free in Themis' own sources.
 - **Running a single test:** the test runner has no CLI filtering ([tests/test_main.cpp](tests/test_main.cpp) `main()` runs every `TEST(name)` registered). To iterate on one, temporarily comment out others or add an early filter; don't assume `--gtest_filter`-style flags exist. The tests use a tiny custom framework (`TEST`, `CHECK`, `CHECK_NEAR`), not Catch/GoogleTest.
-- CI ([.github/workflows/build.yml](.github/workflows/build.yml)) is described in the README ("Continuous integration"); it never packages or publishes anything.
+- CI ([.github/workflows/build.yml](../../.github/workflows/build.yml)) is described in the README ("Continuous integration"); it never packages or publishes anything.
 
 ## Architecture
 

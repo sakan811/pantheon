@@ -139,14 +139,14 @@ tests/                 test_main.cpp (DSP), plugin_smoke.cpp (headless JUCE)
 ```
 
 ### Continuous integration
-[.github/workflows/build.yml](.github/workflows/build.yml) builds the universal VST3 + AU on a macOS runner and a VST3 on
+[.github/workflows/build.yml](../../.github/workflows/build.yml) builds the universal VST3 + AU on a macOS runner and a VST3 on
 Linux, and runs the DSP tests, on every push. It checks that the code builds and publishes nothing: no downloadable binaries, by design.
 Releases are version tags made by hand, source only (see [NOTICE.md](NOTICE.md)).
 
-Security checks, all free for a public repository and none of them publishing anything: [codeql.yml](.github/workflows/codeql.yml)
-(CodeQL static analysis of the C++ on every push, pull request and weekly), [dependency-review.yml](.github/workflows/dependency-review.yml)
+Security checks, all free for a public repository and none of them publishing anything: [codeql.yml](../../.github/workflows/codeql.yml)
+(CodeQL static analysis of the C++ on every push, pull request and weekly), [dependency-review.yml](../../.github/workflows/dependency-review.yml)
 (fails a pull request that adds a dependency with a known high-severity vulnerability) and Dependabot
-([dependabot.yml](.github/dependabot.yml)) keeping the actions up to date. The workflows have read-only tokens and pin every
+([dependabot.yml](../../.github/dependabot.yml)) keeping the actions up to date. The workflows have read-only tokens and pin every
 action to a commit SHA. Secret scanning with push protection is on, and `main` requires the build checks to pass and cannot be
 force-pushed. To report a vulnerability, see [SECURITY.md](SECURITY.md).
 

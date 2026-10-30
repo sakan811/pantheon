@@ -16,6 +16,11 @@ on:
 permissions:
   contents: read
 
+# Each plugin lives in plugins/<name>/; for now there is one.
+defaults:
+  run:
+    working-directory: plugins/themis
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true

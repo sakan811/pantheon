@@ -1,0 +1,10 @@
+# build output (each plugin also has its own .gitignore)
+build/
+build-*/
+cmake-build-*/
+
+# editors, OS, local tooling
+.DS_Store
+.vscode/
+.idea/
+.claude/

@@ -4,7 +4,7 @@
 name: build
 
 # This repository is source only: CI checks that the code builds and passes its tests. It never packages, uploads or
-# publishes a compiled plugin (see NOTICE.md).
+# publishes a compiled plugin (see plugins/themis/NOTICE.md).
 on:
   push:
     branches: [main]
@@ -13,6 +13,11 @@ on:
 
 permissions:
   contents: read
+
+# Each plugin lives in plugins/<name>/; for now there is one.
+defaults:
+  run:
+    working-directory: plugins/themis
 
 # A newer push to the same branch or pull request makes the older run pointless.
 concurrency:
