@@ -1,0 +1,126 @@
+# CLAUDE.md
+
+Hephaestus: a JUCE 8 mastering saturator (VST3 / AU / Standalone, macOS). The user draws up to six
+bands over the spectrum; each is either **Saturate** or **Harmonic Fill** (an adaptive, missing-fundamental
+style harmonic generator). See `README.md` for what it does and the research behind it; this file is what
+you need to change it safely.
+
+## Build and verify
+
+```bash
+# Required on this machine: the Command Line Tools ship an SDK that Xcode's linker cannot read.
+export SDKROOT=$(xcrun --sdk macosx --show-sdk-path)
+
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release     # fetches JUCE 8.0.16-security (or uses third_party/JUCE)
+cmake --build build --target HephaestusTests -j 10 && ./build/HephaestusTests_artefacts/Release/HephaestusTests
+cmake --build build --target Hephaestus_VST3 Hephaestus_AU Hephaestus_Standalone -j 10
+cmake --build build --target HephaestusUiCheck && ./build/HephaestusUiCheck_artefacts/Release/HephaestusUiCheck
+cmake --build build --target HephaestusHostCheck && ./build/HephaestusHostCheck_artefacts/Release/HephaestusHostCheck ~/Library/Audio/Plug-Ins/VST3/Hephaestus.vst3
+cmake --build build --target HephaestusSnapshot && ./build/HephaestusSnapshot_artefacts/Release/HephaestusSnapshot docs/screenshot.png "808 Sub Fill" sub 2
+auval -v aufx Hphs Hpha                             # Apple's AU validator
+```
+
+- Building the plugin targets **installs** them to `~/Library/Audio/Plug-Ins/{VST3,Components}` (`COPY_PLUGIN_AFTER_BUILD`).
+- `HephaestusTests`, `UiCheck`, `HostCheck` and `Snapshot` are `EXCLUDE_FROM_ALL`; build them by name. `HephaestusTests` needs no GUI.
+- Definition of done for any DSP change: `HephaestusTests` passes **and** the README numbers still match its output.
+- Definition of done for a UI or parameter change: `UiCheck` passes, and `HostCheck` + `auval` after rebuilding the plugin.
+- pluginval is not available (the sandbox blocks running the downloaded binary); `HostCheck` + `auval` are the substitutes.
+
+## Layout
+
+```
+Source/DSP/        no GUI dependencies; everything here is covered by Tests/Tests.cpp
+  Band.h             BandMode, maxBands, effectiveRange(), harmonicReach(), harmonicSpan(): where a band really sits and where its harmonics land
+  Biquad.h           double-precision biquads, Butterworth, Bandpass pair
+  Waveshaper.h       curves + residual-ADAA shaper
+  Saturator.h        user-placed saturate bands: band-pass, per-band oversample + shape, outputs only the distortion
+  FundamentalEngine.h  Chebyshev "extend" (+ adaptive gain) + difference-tone "rebuild", GapDetector, harmonicsForTone()
+  Engine.h           BandParams, latency alignment, band mixing, M/S, gain match, delta, meters, analyzer taps
+  AnalyzerTap.h      lock-free sample FIFOs (audio thread -> editor)
+  SpectrumAnalyzer.h Pro-Q-style FFT analyzer (GUI-free so its calibration is testable)
+Source/Parameters.h  parameter layout, presets, readParams(), band helpers, legacy migration  <- the single source of truth for parameters
+Source/Plugin*.{h,cpp}, Source/UI/   JUCE wrapper and editor
+Tests/               Tests.cpp (DSP), UiCheck.cpp (mouse drags, slots, legacy sessions), HostCheck.cpp (loads the VST3),
+                     Snapshot.cpp (editor -> PNG), Check.h, TestSignals.h
+```
+
+## Rules that keep it correct
+
+**Real time.** `Engine::process` and everything under it must not allocate, lock, or log. Buffers are sized in
+`prepare()`. `setLatencySamples` is only called from the message thread (`AsyncUpdater` in the processor).
+
+**Latency.** Every path that is summed with another must pass through an `IntDelay` set to the oversampling
+latency (`dryDelay`, `fundDelay`, `bypassDelay`). If you add a path, align it and extend test [2]/[8].
+
+**Saturate bands add their distortion; they never replace the signal.** `Saturator::process` writes only what the
+shapers add (`shapeBlock<Curve, false>`), and `Engine` sums that onto the clean, `bypassDelay`-aligned input. That
+is what makes small-signal gain exactly 1 for any arrangement of overlapping bands (test [1]). Do not route the
+clean signal through the band filters or the oversamplers, and do not go back to a complementary split.
+
+**ADAA maths.** ADAA is applied to the *residual* (`f(u)` minus its tangent) and added to the untouched input, so
+small-signal gain is exactly 1. Do not "simplify" this back to plain ADAA: it low-passes the wet path (about -5 dB at
+15 kHz without oversampling). ADAA runs in `double`; keep the first-sample priming in `AdaaState` (without it a
+non-zero bias clicks at start).
+
+**Low-frequency filters are `double`.** Poles near z = 1 do not survive single precision at tens of Hz.
+
+**Bands start and stop cleanly.** A band that is off and has faded out is not processed; when it returns its filters,
+ADAA state, oversampler and fill engine are reset (`startBand`, `runFillBand`). The fade is one block. Band edges
+glide towards their target so dragging doesn't zipper.
+
+**Fundamental engine.** Harmonic weights are exact only while the normalised amplitude `a` is ~1 (the k-th Chebyshev
+harmonic scales as `a^k`), so the envelope release is deliberately slow (`6 / lo`). Shortening it costs accuracy at
+the top harmonics (test [5]); lengthening it risks hanging tails (test [5b]). Rebuild's gap detector must stay
+frequency-selective (`GapDetector`): comparing against the whole band, or correlating with the restored signal,
+were both tried and failed.
+
+**Adaptive fill.** `Amount` is the harmonics' total *energy* relative to the band (`harmonicsForTone` weights carry unit
+energy, so `extGain` = amount and `target` = amount squared). Adapt measures the energy above the band
+(`harmonicReach`) on the *input* and scales the harmonics by `(1 - adapt) + adapt * sqrt (shortfall)`. Keep the
+measurement on the input: measuring the output would make it a feedback loop. Test [5c] pins the law; if you change
+the reach, the time constants or the weights, re-run it and update the README numbers.
+
+**Parameters.** Global IDs in `hep::id` are stored in sessions and automation: never rename or remove one. Band ids come
+from `bandIds (i)` (`b1_lo` ... `b6_rebuild`) and are equally permanent. A new parameter needs a `ParameterID` version
+(bands use 2), an entry in `readParams()`, and (if it has a knob) a row in the editor's `knobSpecs` / `bandKnobSpecs`.
+Session-wide controls go in `isGlobalParameter()` so presets leave them alone. The very first layout (three fixed
+bands + one bass engine, ids `driveLow`, `fundLo`, ...) is gone; `migrateLegacyState()` turns such a session into bands,
+and `UiCheck` covers it. Never build a `juce::String` on the audio thread: look band parameters up through the cached
+`bandIds()` table.
+
+## DRY: where each thing lives (change it there only)
+
+- parameter ranges, defaults, choice lists, "off" thresholds -> `Parameters.h` (the editor reads combo items from the parameter)
+- per-band parameter ids -> `bandIds()`; adding / removing a band and switching its mode -> `addBand`, `removeBand`, `setBandMode`
+  (the spectrum menu, the double-click menu and the band panel buttons all call these)
+- where a band really sits (minimum width, the 2 kHz fill limit), where its harmonics land (the zone the display shades) and which harmonics
+  fit below Nyquist -> `effectiveRange()` / `harmonicSpan()` / `highestHarmonic()` / `harmonicReach()` (the adaptive measurement region) in `Band.h`
+  (engine, spectrum view and tests all call them; test [5f] pins the span against measured energy)
+- band colours -> `colour::forMode()` in `Look.h`
+- knob id / caption / tooltip / panel membership -> `knobSpecs` and `panelSpecs` (character, master) and `bandKnobSpecs` (the six slots that follow the selected band) in `PluginEditor.cpp`
+- log-frequency axis -> `FreqAxis` in `SpectrumView.h`
+- test signals and `check()` -> `Tests/TestSignals.h`, `Tests/Check.h`
+
+## Gotchas already paid for
+
+- In an editor constructor call `setSize()` **last**; `resized()` runs inside it and only positions controls that exist.
+- A hosted VST3's parameters are wrapper objects: find them by name, not `dynamic_cast<RangedAudioParameter*>`.
+  Its editor is a native view, so editor screenshots must instantiate `HephaestusProcessor` directly (`Snapshot.cpp`).
+- `runDispatchLoopUntil` needs `JUCE_MODAL_LOOPS_PERMITTED=1` in the test targets.
+- The analyzer uses Hann, so an off-bin sine can read up to 1.42 dB low (scalloping). That is expected, not a bug.
+- `Component::hitTest (int, int)` is virtual: don't name a one-argument helper `hitTest` (it hides it and the plugin's
+  warning flags reject that). Don't name a local `range` inside `SpectrumView` either; it shadows the analyzer setting.
+- The editor's band panel is driven by `bandSignature()` polled from the timer (selection, which bands exist, their
+  modes); knobs are re-attached when it changes. If you add state that changes what the panel shows, put it in the signature.
+- `HostCheck` randomises every wrapper parameter, the host's own **Bypass** included; it must be cleared before anything
+  that measures audio (it ends up engaged or not depending on how many parameters precede it, so adding parameters can
+  silently flip it). Symptom: audio undelayed and latency "stuck" at whatever it was before.
+- A hosted VST3 wraps state in its own chunk, so `HostCheck` cannot feed it a hand-built session; legacy-session
+  tests go through `HephaestusProcessor` directly (`UiCheck`).
+
+## Conventions
+
+- Match the surrounding JUCE style: Allman braces, a space before call parentheses, `juce::` qualified in headers.
+- Comments explain *why* (a measured failure, a constraint), not what the code does.
+- Claims in the README must be backed by a test or a measurement; re-run the suite and update the numbers.
+- Commit by topic (DSP / plugin / UI / tests / docs / build); end commit messages with the Co-Authored-By trailer.
