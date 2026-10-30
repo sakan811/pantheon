@@ -49,7 +49,7 @@ Delete an item here when it is done; this list is the only place that says what 
   copyright name.
 - **Interface.** Each draws its own look (`Look.h` in Hephaestus, `Theme.h` in Harmonia), not `shared/ui`. Whether they adopt
   the hardware look is a design decision, not a refactor; until then the shared kit stays Themis-only in practice.
-- **JUCE version.** Themis pins 8.0.6, Hephaestus 8.0.16-security, Harmonia whatever its CMakeLists pins. One version for all
+- **JUCE version.** Themis pins 8.0.6, Hephaestus 8.0.16-security, Harmonia 8.0.12. One version for all
   is the aim, and a precondition for a root CMake project.
 - **Installing on build.** Both set `COPY_PLUGIN_AFTER_BUILD TRUE` unconditionally, so building a plugin target copies it into
   `~/Library/Audio/Plug-Ins`. Themis makes this an option (`THEMIS_INSTALL_AFTER_BUILD`), which CI relies on.
