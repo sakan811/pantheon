@@ -73,9 +73,7 @@ if(THEMIS_BUILD_PLUGIN)
         plugin/Source/PluginEditor.cpp)
 
     target_compile_definitions(Themis PUBLIC
-        JUCE_WEB_BROWSER=0
-        JUCE_USE_CURL=0
-        JUCE_VST3_CAN_REPLACE_VST2=0
+        ${PANTHEON_JUCE_DEFINITIONS}
         JUCE_STRICT_REFCOUNTEDPOINTER=1)
 
     target_link_libraries(Themis
@@ -96,7 +94,7 @@ if(THEMIS_BUILD_PLUGIN)
             plugin/Source/Parameters.cpp
             plugin/Source/PluginProcessor.cpp
             plugin/Source/PluginEditor.cpp)
-        target_compile_definitions(ThemisSmoke PRIVATE JucePlugin_Name="${THEMIS_PLUGIN_NAME}" JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_MODAL_LOOPS_PERMITTED=1)
+        target_compile_definitions(ThemisSmoke PRIVATE JucePlugin_Name="${THEMIS_PLUGIN_NAME}" ${PANTHEON_JUCE_DEFINITIONS} JUCE_MODAL_LOOPS_PERMITTED=1)
         target_link_libraries(ThemisSmoke
             PRIVATE themis_core pantheon_ui juce::juce_audio_utils juce::juce_audio_formats
             PUBLIC juce::juce_recommended_config_flags)

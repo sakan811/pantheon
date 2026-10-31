@@ -31,7 +31,7 @@ Rules that keep it that way:
 
 ## What this is
 
-**Themis Verdict**: a mastering check suite in one plugin (VST3 + AU, Standalone) built on JUCE 8 (the version is set in [cmake/Juce.cmake](../../cmake/Juce.cmake)), targeting macOS plugin hosts (universal arm64 + x86_64, macOS 11+). CMake targets, namespaces and plugin codes use the short name "Themis". The feature list, name origin and the "verified / not verified" table are in the README.
+**Themis Verdict**: a mastering check suite in one plugin (VST3 + AU, Standalone) built on JUCE (the version is set in [cmake/Juce.cmake](../../cmake/Juce.cmake)), targeting macOS plugin hosts (universal arm64 + x86_64, macOS 11+). CMake targets, namespaces and plugin codes use the short name "Themis". The feature list, name origin and the "verified / not verified" table are in the README.
 
 ## Core principles (apply to every change)
 
@@ -87,7 +87,7 @@ Two layers with a hard dependency direction: `plugin/` → `core/`, never the re
 
 ## Gotchas
 
-- JUCE is AGPLv3/commercial; distributing builds has licensing implications (README "License" and "Terms of use", NOTICE.md).
+- JUCE is AGPLv3/commercial; distributing builds has licensing implications (README "License and terms", NOTICE.md).
 - The README "Limitations" document the known limiter overshoot on full-band white noise (up to ~1 dB); don't "fix" core tests by loosening ceilings without checking that note.
 - Stereo in/stereo out only; `isBusesLayoutSupported` rejects everything else (no test calls it yet).
 - The README "Limitations" were probed against the code on 2026-10-29 and hold. The probes are not in the repo (scratch programs that include `tests/test_main.cpp` with `main` renamed), so add a `TEST` before relying on their numbers. One probe found a bug (a mix of sources with different offsets was named as one `delay`), fixed by `phasecheck::kMinRunCoherence` and guarded by `phase_check_does_not_name_one_delay_for_sources_with_different_offsets`; the README states the resulting limit.

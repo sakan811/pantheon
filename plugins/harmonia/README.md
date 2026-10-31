@@ -25,7 +25,7 @@ line and the key it is meant to be in. (CMake targets, namespaces and plugin cod
 - **Analog look, digital brain.** The interface is a piece of studio hardware drawn entirely from code by the kit shared
   with the other plugins ([shared/ui](../../shared/ui)): no image, font or sound files are shipped.
 - **Free, public, source only.** The repository holds the code, not a download, under the AGPL-3.0-or-later (see
-  [License](#license) and [Terms of use](#terms-of-use)).
+  [License and terms](#license-and-terms)).
 
 ## Features
 
@@ -90,7 +90,7 @@ This copies the plug-ins to `~/Library/Audio/Plug-Ins/VST3/Harmonia Pitch.vst3` 
 > cannot start until `sudo xcodebuild -runFirstLaunch` is run, which also breaks CMake's Xcode generator.
 > If you run that once, the stock `cmake -G Xcode` flow works too.
 
-Builds are for your own use; if you hand one to somebody else, see [Terms of use](#terms-of-use).
+Builds are for your own use; if you hand one to somebody else, see [License and terms](#license-and-terms).
 
 ### Using it in FL Studio
 
@@ -112,7 +112,7 @@ Tips for the most natural result:
 
 ## Development
 
-Built with [JUCE](https://juce.com) 8. The engine in `Source/dsp` is JUCE-free and can be run offline on WAV files; the plugin
+Built with [JUCE](https://juce.com). The engine in `Source/dsp` is JUCE-free and can be run offline on WAV files; the plugin
 layer only holds the parameters, the host glue and the editor.
 
 ### Tests, screenshots and layout
@@ -183,22 +183,13 @@ state of that is tracked in the repository's [CLAUDE.md](../../CLAUDE.md)). Run 
 - **A detection more than an octave away** from where the voice just was is treated as a glitch and passes through untouched
   unless it persists.
 
-## License
+## License and terms
 
-Harmonia is free software, licensed under the **GNU Affero General Public License v3.0 or later** ([LICENSE](../../LICENSE)). It is
-built on [JUCE](https://juce.com), which is dual-licensed under the AGPLv3 and a commercial licence; Harmonia uses the AGPLv3
-option, and JUCE is fetched when you configure the build and is not part of this repository. Third-party components,
-trademarks and the "source only" policy are described in [NOTICE.md](../../NOTICE.md). Harmonia is maintained by one person:
-suggestions and bug reports are welcome as issues, code contributions are not accepted ([CONTRIBUTING.md](../../CONTRIBUTING.md)).
+Harmonia is free software under the AGPL-3.0-or-later, and is source only. The licence, JUCE and the other third-party
+components, the trademark note and what you owe somebody if you hand them a build are in [NOTICE.md](../../NOTICE.md); they are
+the same for every plugin of the repository. Suggestions and bug reports are welcome as issues, code contributions are not
+accepted ([CONTRIBUTING.md](../../CONTRIBUTING.md)).
 
-## Terms of use
-
-- **Source only.** This repository contains the code, not a download, and publishes no binaries; releases are source only. Building and
-  using Harmonia yourself is free (see [NOTICE.md](../../NOTICE.md) for the policy and the third-party components).
-- **Passing it on.** If you give a build to somebody else, the AGPL requires you to give them the corresponding source
-  (see [NOTICE.md](../../NOTICE.md)), because JUCE is licensed under the AGPLv3 or a commercial licence. macOS also quarantines a
-  copy that is not signed with a Developer ID certificate and notarised (`xattr -cr "Harmonia Pitch.vst3"` clears it for personal use).
-- **No warranty.** Harmonia is provided "as is", without warranty of any kind. It is an audio effect: listen to the result
-  and keep your original recording.
-- **Trademarks.** Product and company names mentioned here belong to their owners and are used only to describe what Harmonia
-  works with or what a statement is about; Harmonia is not affiliated with or endorsed by any of them.
+- **No warranty.** Harmonia is provided "as is", without warranty of any kind. It is an audio effect: listen to the result and keep your original recording.
+- **Passing it on.** macOS quarantines a copy that is not signed with a Developer ID certificate and notarised
+  (`xattr -cr "Harmonia Pitch.vst3"` clears it for personal use).

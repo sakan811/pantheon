@@ -26,7 +26,17 @@ constexpr int kStyleTop = 400, kStyleH = 168;  // the style and knob module
 } // namespace
 
 HarmoniaEditor::HarmoniaEditor (HarmoniaProcessor& p)
-    : AudioProcessorEditor (&p), proc (p), graph (p)
+    : AudioProcessorEditor (&p), proc (p), graph (p),
+      rangeBox (p.apvts, ids::range,
+                "Pick your voice type. It narrows the pitch search so tracking is faster and never jumps an octave."),
+      keyBox (p.apvts, ids::key, "The key (root note) of your song."),
+      scaleBox (p.apvts, ids::scale,
+                "The notes your vocal is allowed to land on. Chromatic = every semitone (fixes pitch only)."),
+      bypassButton (p.apvts, ids::bypass, "Bypass",
+                    "Hear your vocal untouched (still delayed by the plug-in latency, so it stays in time)."),
+      autoKeyButton (p.apvts, ids::autoKey, "Auto key",
+                     "Follow the key of the vocal by itself, and change it when the song changes key. "
+                     "Works out the key from the singing, so give it a few seconds of vocal. Major/minor only.")
 {
     setLookAndFeel (&laf);
 
@@ -34,28 +44,13 @@ HarmoniaEditor::HarmoniaEditor (HarmoniaProcessor& p)
     content.onPaint = [this] (juce::Graphics& g) { paintContent (g); };
 
     // ---- header ----
-    setupChoice (rangeBox, rangeAtt, ids::range,
-                 "Pick your voice type. It narrows the pitch search so tracking is faster and never jumps an octave.");
-
-    bypassButton.setClickingTogglesState (true);
     bypassButton.setColour (juce::TextButton::buttonOnColourId, colours::warn);
-    bypassButton.setTooltip ("Hear your vocal untouched (still delayed by the plug-in latency, so it stays in time).");
-    content.addAndMakeVisible (bypassButton);
-    bypassAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (proc.apvts, ids::bypass, bypassButton);
 
     // ---- key card ----
-    setupChoice (keyBox, keyAtt, ids::key, "The key (root note) of your song.");
-    setupChoice (scaleBox, scaleAtt, ids::scale,
-                 "The notes your vocal is allowed to land on. Chromatic = every semitone (fixes pitch only).");
-
     detectButton.setTooltip ("Click, sing or play a phrase of the song, then click again - Harmonia picks the key for you.");
-    autoKeyButton.setClickingTogglesState (true);
-    autoKeyButton.setTooltip ("Follow the key of the vocal by itself, and change it when the song changes key. "
-                              "Works out the key from the singing, so give it a few seconds of vocal. Major/minor only.");
-    content.addAndMakeVisible (autoKeyButton);
-    autoKeyAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (proc.apvts, ids::autoKey, autoKeyButton);
     detectButton.onClick = [this] { onDetectClicked(); };
-    content.addAndMakeVisible (detectButton);
+    for (auto* c : std::initializer_list<juce::Component*> { &rangeBox, &bypassButton, &keyBox, &scaleBox, &autoKeyButton, &detectButton })
+        content.addAndMakeVisible (c);
 
     detectedText = "Not sure of the key? Sing a phrase and let Harmonia find it.";
     statusLabel.setJustificationType (juce::Justification::topLeft);
@@ -106,17 +101,6 @@ HarmoniaEditor::HarmoniaEditor (HarmoniaProcessor& p)
 HarmoniaEditor::~HarmoniaEditor()
 {
     setLookAndFeel (nullptr);
-}
-
-void HarmoniaEditor::setupChoice (juce::ComboBox& box, std::unique_ptr<ComboAttachment>& attachment, const char* id,
-                                  const juce::String& tip)
-{
-    // The parameter owns the list of choices, so the box can never drift out of step with it.
-    if (auto* choice = dynamic_cast<juce::AudioParameterChoice*> (proc.apvts.getParameter (id)))
-        box.addItemList (choice->choices, 1);
-    box.setTooltip (tip);
-    content.addAndMakeVisible (box);
-    attachment = std::make_unique<ComboAttachment> (proc.apvts, id, box);
 }
 
 void HarmoniaEditor::setupKnob (int index, const char* id, const juce::String& title, const juce::String& tip)

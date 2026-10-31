@@ -21,15 +21,9 @@ public:
     void selectBand (int band);
 
 private:
-    using ComboAttachment = juce::AudioProcessorValueTreeState::ComboBoxAttachment;
-    using ButtonAttachment = juce::AudioProcessorValueTreeState::ButtonAttachment;
-
     enum class Panel { band, character, master, count };
 
     void addKnob (const char* paramId, const char* caption, const char* tooltip);
-    void addChoiceBox (juce::ComboBox&, std::unique_ptr<ComboAttachment>&, const char* paramId, const juce::String& tooltip);
-    void addToggle (juce::TextButton&, std::unique_ptr<ButtonAttachment>&, const char* paramId, const juce::String& text,
-                    const juce::String& tooltip);
     void layoutPanelKnobs (Panel);
     void layoutBandPanel();
     void refreshBandPanel();
@@ -46,10 +40,9 @@ private:
     std::array<std::unique_ptr<ui::Knob>, hep::maxBands> bandKnobs; // re-attached to whichever band is selected
     int bandKnobCount = 0;
 
-    juce::ComboBox presetBox, stereoBox, osBox, curveBox;
-    std::unique_ptr<ComboAttachment> stereoAttachment, osAttachment, curveAttachment;
-    juce::TextButton deltaButton, matchButton;
-    std::unique_ptr<ButtonAttachment> deltaAttachment, matchAttachment;
+    juce::ComboBox presetBox;
+    ui::Choice stereoBox, osBox, curveBox;
+    ui::Toggle deltaButton, matchButton;
 
     juce::TextButton saturateModeButton, fillModeButton, removeButton, addSaturateButton, addFillButton;
     std::array<juce::Rectangle<int>, hep::maxBands> chipBounds;

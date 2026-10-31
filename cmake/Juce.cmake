@@ -9,6 +9,10 @@ include(FetchContent)
 
 set(PANTHEON_JUCE_TAG "8.0.16-security")
 
+# The JUCE switches every plugin and tool of the repository sets (no web browser, no curl, no VST2 replacement); a target adds
+# them with target_compile_definitions(<target> ... ${PANTHEON_JUCE_DEFINITIONS}).
+set(PANTHEON_JUCE_DEFINITIONS JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_VST3_CAN_REPLACE_VST2=0)
+
 if(NOT FETCHCONTENT_SOURCE_DIR_JUCE AND EXISTS "${CMAKE_CURRENT_LIST_DIR}/../third_party/JUCE/CMakeLists.txt")
     set(FETCHCONTENT_SOURCE_DIR_JUCE "${CMAKE_CURRENT_LIST_DIR}/../third_party/JUCE")
 endif()

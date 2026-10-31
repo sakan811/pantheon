@@ -36,7 +36,7 @@ the short name "Themis".)
   phosphor traces, lamps for every verdict, push switches that light up, rotary knobs with lit scales and a swing-needle
   correlation meter. It is drawn entirely from code: no image, font or sound files are shipped.
 - **Free, public, source only.** The repository holds the code, not a download, under the AGPL-3.0-or-later (see
-  [License](#license) and [Terms of use](#terms-of-use)).
+  [License and terms](#license-and-terms)).
 
 ## Features
 
@@ -83,7 +83,7 @@ codesign --force --deep --sign - "$HOME/Library/Audio/Plug-Ins/Components/Themis
 auval -v aufx Thms Thmi               # optional: validate the AU
 ```
 
-Builds are for your own use; if you hand one to somebody else, see [Terms of use](#terms-of-use).
+Builds are for your own use; if you hand one to somebody else, see [License and terms](#license-and-terms).
 
 ### Measuring a master
 
@@ -107,7 +107,7 @@ Builds are for your own use; if you hand one to somebody else, see [Terms of use
 
 ## Development
 
-Built with [JUCE](https://juce.com) 8. All DSP lives in a dependency-free C++17 core
+Built with [JUCE](https://juce.com). All DSP lives in a dependency-free C++17 core
 ([core/include/themis](core/include/themis)) with its own unit tests; the plugin layer only draws and wires it up.
 
 ### Tests, screenshots and layout
@@ -173,24 +173,13 @@ force-pushed. To report a vulnerability, see [SECURITY.md](../../SECURITY.md).
 - **Clip detection** is a heuristic on the waveform: flat tops are found by their shape (equal samples at a high level), so a synthesised square wave looks like clipping (a clean −6 dBFS square counted hundreds of clips per second of audio) and a clip that was smoothed afterwards does not (the same hard-clipped tone low-passed at 3 kHz counted none). True peak is a 4× oversampled estimate, not a certified BS.1770 meter. The limits (−1 / 0 dBTP, any clip) are rules of thumb.
 - No CLAP build yet.
 
-## License
+## License and terms
 
-Themis is free software, licensed under the **GNU Affero General Public License v3.0 or later** ([LICENSE](../../LICENSE)). It is
-built on [JUCE](https://juce.com), which is dual-licensed under the AGPLv3 and a commercial licence; Themis uses the AGPLv3
-option, and JUCE is fetched when you configure the build and is not part of this repository. Third-party components,
-trademarks and the "source only" policy are described in [NOTICE.md](../../NOTICE.md). Themis is maintained by one person:
-suggestions and bug reports are welcome as issues, code contributions are not accepted ([CONTRIBUTING.md](../../CONTRIBUTING.md)).
+Themis is free software under the AGPL-3.0-or-later, and is source only. The licence, JUCE and the other third-party
+components, the trademark note and what you owe somebody if you hand them a build are in [NOTICE.md](../../NOTICE.md); they are
+the same for every plugin of the repository. Suggestions and bug reports are welcome as issues, code contributions are not
+accepted ([CONTRIBUTING.md](../../CONTRIBUTING.md)).
 
-## Terms of use
-
-- **Source only.** This repository contains the code, not a download, and publishes no binaries; releases are source only. Building and
-  using Themis yourself is free (see [NOTICE.md](../../NOTICE.md) for the policy and the third-party components).
-- **Passing it on.** If you give a build to somebody else, the AGPL requires you to give them the corresponding source
-  (see [NOTICE.md](../../NOTICE.md)), because JUCE is licensed under the AGPLv3 or a commercial licence. macOS also quarantines a
-  copy that is not signed with a Developer ID certificate and notarised (`xattr -cr "Themis Verdict.vst3"` clears it for
-  personal use).
-- **No warranty.** Themis is provided "as is", without warranty of any kind. It measures audio and offers advice based on
-  rules of thumb; it does not certify that a master meets any broadcast, streaming or distribution specification, and it
-  does not replace listening.
-- **Trademarks.** Product and company names mentioned here belong to their owners and are used only to describe what Themis
-  works with; Themis is not affiliated with or endorsed by any of them.
+- **No warranty.** Themis is provided "as is", without warranty of any kind. It measures audio and offers advice based on rules of thumb; it does not certify that a master meets any broadcast, streaming or distribution specification, and it does not replace listening.
+- **Passing it on.** macOS quarantines a copy that is not signed with a Developer ID certificate and notarised
+  (`xattr -cr "Themis Verdict.vst3"` clears it for personal use).

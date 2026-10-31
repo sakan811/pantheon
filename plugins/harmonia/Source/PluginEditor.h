@@ -25,8 +25,6 @@ private:
     static inline const juce::Rectangle<int> kNameplateBounds { 12, 8, 230, 68 };
     static inline const juce::Rectangle<int> kLatencyBounds { 262, 36, 96, 28 };
 
-    using ComboAttachment = juce::AudioProcessorValueTreeState::ComboBoxAttachment;
-
     struct Content : juce::Component
     {
         std::function<void (juce::Graphics&)> onPaint;
@@ -45,7 +43,6 @@ private:
     void toggleNote (int pitchClass);
     void applyPreset (int index);
     void onDetectClicked();
-    void setupChoice (juce::ComboBox&, std::unique_ptr<ComboAttachment>&, const char* id, const juce::String& tip);
     juce::String makeLatencyText() const;
     void setupKnob (int index, const char* id, const juce::String& title, const juce::String& tip);
 
@@ -56,14 +53,12 @@ private:
 
     PitchGraph graph;
     NoteKeyboard keyboard;
-    juce::ComboBox rangeBox, keyBox, scaleBox;
-    juce::TextButton bypassButton { "Bypass" }, detectButton { "Detect key" }, autoKeyButton { "Auto key" };
+    ui::Choice rangeBox, keyBox, scaleBox;
+    ui::Toggle bypassButton, autoKeyButton;
+    juce::TextButton detectButton { "Detect key" };
     juce::TextButton presetButtons[3];
     juce::Label statusLabel;
     std::array<std::unique_ptr<ui::Knob>, 6> knobs;
-
-    std::unique_ptr<ComboAttachment> rangeAtt, keyAtt, scaleAtt;
-    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> bypassAtt, autoKeyAtt;
 
     bool keysLocked = false; // the key follows the vocal: the piano keys cannot be edited
     bool awaitingKeyResult = false;

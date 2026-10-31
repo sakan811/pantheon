@@ -168,7 +168,7 @@ private:
             const auto chip = row.removeFromRight (kChipWidth).removeFromTop (17);
             const bool on = audition == item.hear;
             ui::hw::drawPushButton (g, chip.toFloat(), on, colours::amber, false, hoverRow >= 0 && &advice.items[static_cast<size_t> (hoverRow)] == &item);
-            g.setColour (on ? juce::Colour (0xff1c1300) : colours::text);
+            g.setColour (on ? colours::lampInk : colours::text);
             g.setFont (ui::labelFont (9.5f));
             g.drawText (on ? "STOP" : "HEAR", chip, juce::Justification::centred);
             row.removeFromRight (4);

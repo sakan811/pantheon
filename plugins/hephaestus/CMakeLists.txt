@@ -44,10 +44,7 @@ target_sources(Hephaestus PRIVATE
     Source/PluginProcessor.cpp
     Source/PluginEditor.cpp)
 
-target_compile_definitions(Hephaestus PUBLIC
-    JUCE_WEB_BROWSER=0
-    JUCE_USE_CURL=0
-    JUCE_VST3_CAN_REPLACE_VST2=0)
+target_compile_definitions(Hephaestus PUBLIC ${PANTHEON_JUCE_DEFINITIONS})
 
 target_link_libraries(Hephaestus
     PRIVATE
@@ -85,8 +82,7 @@ target_compile_definitions(HephaestusHostCheck PRIVATE
     JUCE_PLUGINHOST_VST3=1
     JUCE_PLUGINHOST_AU=0
     JUCE_MODAL_LOOPS_PERMITTED=1
-    JUCE_WEB_BROWSER=0
-    JUCE_USE_CURL=0)
+    ${PANTHEON_JUCE_DEFINITIONS})
 target_link_libraries(HephaestusHostCheck
     PRIVATE
         juce::juce_audio_processors
@@ -102,7 +98,7 @@ set_target_properties(HephaestusHostCheck PROPERTIES EXCLUDE_FROM_ALL TRUE OSX_A
 juce_add_console_app(HephaestusSnapshot PRODUCT_NAME "HephaestusSnapshot")
 target_sources(HephaestusSnapshot PRIVATE Tests/Snapshot.cpp Source/PluginProcessor.cpp Source/PluginEditor.cpp)
 target_include_directories(HephaestusSnapshot PRIVATE Source Tests)
-target_compile_definitions(HephaestusSnapshot PRIVATE JucePlugin_Name="${HEPHAESTUS_PLUGIN_NAME}" JUCE_MODAL_LOOPS_PERMITTED=1 JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0)
+target_compile_definitions(HephaestusSnapshot PRIVATE JucePlugin_Name="${HEPHAESTUS_PLUGIN_NAME}" JUCE_MODAL_LOOPS_PERMITTED=1 ${PANTHEON_JUCE_DEFINITIONS})
 target_link_libraries(HephaestusSnapshot
     PRIVATE
         pantheon_ui
@@ -119,7 +115,7 @@ set_target_properties(HephaestusSnapshot PROPERTIES EXCLUDE_FROM_ALL TRUE OSX_AR
 juce_add_console_app(HephaestusUiCheck PRODUCT_NAME "HephaestusUiCheck")
 target_sources(HephaestusUiCheck PRIVATE Tests/UiCheck.cpp Source/PluginProcessor.cpp Source/PluginEditor.cpp)
 target_include_directories(HephaestusUiCheck PRIVATE Source Tests)
-target_compile_definitions(HephaestusUiCheck PRIVATE JucePlugin_Name="${HEPHAESTUS_PLUGIN_NAME}" JUCE_MODAL_LOOPS_PERMITTED=1 JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0)
+target_compile_definitions(HephaestusUiCheck PRIVATE JucePlugin_Name="${HEPHAESTUS_PLUGIN_NAME}" JUCE_MODAL_LOOPS_PERMITTED=1 ${PANTHEON_JUCE_DEFINITIONS})
 target_link_libraries(HephaestusUiCheck
     PRIVATE
         pantheon_ui
