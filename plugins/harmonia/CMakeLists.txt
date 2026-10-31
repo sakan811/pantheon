@@ -22,9 +22,6 @@ set(HARMONIA_SOURCES
     Source/PluginProcessor.cpp
     Source/PluginEditor.cpp)
 
-set(HARMONIA_DEFINITIONS
-    JUCE_WEB_BROWSER=0
-    JUCE_USE_CURL=0)
 
 # The plugin's name, written once. JUCE turns PLUGIN_NAME into JucePlugin_Name, which the processor reports to the host;
 # the developer tool is not a plugin target, so it gets the same value as a definition.
@@ -51,8 +48,7 @@ target_sources(Harmonia PRIVATE ${HARMONIA_SOURCES})
 target_include_directories(Harmonia PRIVATE Source)
 
 target_compile_definitions(Harmonia PUBLIC
-    ${HARMONIA_DEFINITIONS}
-    JUCE_VST3_CAN_REPLACE_VST2=0
+    ${PANTHEON_JUCE_DEFINITIONS}
     JUCE_DISPLAY_SPLASH_SCREEN=0)
 
 target_link_libraries(Harmonia
@@ -70,7 +66,7 @@ set_target_properties(HarmoniaDevTool PROPERTIES EXCLUDE_FROM_ALL TRUE)
 target_sources(HarmoniaDevTool PRIVATE Tests/DevTool.cpp ${HARMONIA_SOURCES})
 target_include_directories(HarmoniaDevTool PRIVATE Source)
 target_compile_definitions(HarmoniaDevTool PRIVATE
-    ${HARMONIA_DEFINITIONS}
+    ${PANTHEON_JUCE_DEFINITIONS}
     JucePlugin_Name="${HARMONIA_PLUGIN_NAME}"
     JUCE_MODAL_LOOPS_PERMITTED=1)
 target_link_libraries(HarmoniaDevTool

@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-Hephaestus Forge: a JUCE 8 mastering saturator (VST3 / AU / Standalone, macOS). The user draws up to six
+Hephaestus Forge: a JUCE mastering saturator (VST3 / AU / Standalone, macOS). The user draws up to six
 bands over the spectrum; each is either **Saturate** or **Harmonic Fill** (an adaptive, missing-fundamental
 style harmonic generator). See `README.md` for what it does and the research behind it; this file is what
 you need to change it safely.
@@ -20,7 +20,7 @@ cmake --build build --target HephaestusSnapshot && ./build/HephaestusSnapshot_ar
 auval -v aufx Hphs Hpha                             # Apple's AU validator
 ```
 
-- Building the plugin targets **installs** them to `~/Library/Audio/Plug-Ins/{VST3,Components}` (`COPY_PLUGIN_AFTER_BUILD`).
+- Building the plugin targets **installs** them to `~/Library/Audio/Plug-Ins/{VST3,Components}` (`COPY_PLUGIN_AFTER_BUILD`; listed under "Not yet in line" in the repository's [CLAUDE.md](../../CLAUDE.md)).
 - `HephaestusTests`, `UiCheck`, `HostCheck` and `Snapshot` are `EXCLUDE_FROM_ALL`; build them by name. `HephaestusTests` needs no GUI.
 - Definition of done for any DSP change: `HephaestusTests` passes **and** the README numbers still match its output.
 - Definition of done for a UI or parameter change: `UiCheck` passes, and `HostCheck` + `auval` after rebuilding the plugin.
@@ -97,8 +97,8 @@ and `UiCheck` covers it. Never build a `juce::String` on the audio thread: look 
   fit below Nyquist -> `effectiveRange()` / `harmonicSpan()` / `highestHarmonic()` / `harmonicReach()` (the adaptive measurement region) in `Band.h`
   (engine, spectrum view and tests all call them; test [5f] pins the span against measured energy)
 - the plugin's name ("Hephaestus Forge") -> `HEPHAESTUS_PLUGIN_NAME` in `CMakeLists.txt`, which reaches the code as `JucePlugin_Name`; the nameplate's two words are `hep::gui::kProjectWord` / `kPluginWord` in `UI/HephaestusUi.h` (`UiCheck` checks they agree)
-- band colours -> `hep::ui::forMode()` in `UI/HephaestusUi.h`
-- every pixel of the interface (panels, glass, lamps, knobs, buttons, fonts, the palette) -> `shared/ui`, shared with the other plugins (see the repository's [CLAUDE.md](../../CLAUDE.md)); the editor calls it and does not draw its own
+- band colours -> `hep::gui::forMode()` in `UI/HephaestusUi.h`
+- every pixel of the interface and the parameter-bound controls (panels, glass, lamps, knobs, selectors, switches, fonts, the palette) -> `shared/ui`, shared with the other plugins (see the repository's [CLAUDE.md](../../CLAUDE.md)); the editor calls it and does not draw its own
 - knob id / caption / tooltip / panel membership -> `knobSpecs` and `panelSpecs` (character, master) and `bandKnobSpecs` (the six slots that follow the selected band) in `PluginEditor.cpp`
 - log-frequency axis -> `FreqAxis` in `SpectrumView.h`
 - test signals and `check()` -> `Tests/TestSignals.h`, `Tests/Check.h`

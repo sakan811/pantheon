@@ -12,9 +12,9 @@ ThemisEditor::ThemisEditor (ThemisProcessor& p)
       fundamentalView (p),
       advicePanel (p),
       auditionPanel (p),
-      targetBox (p.apvts, params::target, params::targetNames()),
-      deviceBox (p.apvts, params::device, params::deviceNames()),
-      loudnessBox (p.apvts, params::loudnessTarget, params::loudnessTargetNames()),
+      targetBox (p.apvts, params::target),
+      deviceBox (p.apvts, params::device),
+      loudnessBox (p.apvts, params::loudnessTarget),
       avgKnob (p.apvts, params::avgTime, "Averaging", "Averaging window for the long-term curve. Infinite measures the whole track since Reset."),
       toleranceKnob (p.apvts, params::tolerance, "Tolerance", "How wide the target band is, as a multiple of the curve's own spread. Narrower is stricter; double-click for 1.00x.")
 {

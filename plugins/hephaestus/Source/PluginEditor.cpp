@@ -79,7 +79,18 @@ const char* modeName (BandMode mode) { return mode == BandMode::fill ? "HARMONIC
 
 HephaestusEditor::HephaestusEditor (HephaestusProcessor& p)
     : AudioProcessorEditor (&p), proc (p),
-      spectrum (p.engine, p.apvts, p.currentSampleRate)
+      spectrum (p.engine, p.apvts, p.currentSampleRate),
+      stereoBox (p.apvts, id::stereo,
+                 "Mid/Side saturates the centre and sides together; harmonic fill bands then work on the mid channel only, keeping bass centred."),
+      osBox (p.apvts, id::oversampling,
+             "Oversampling for the saturate bands (linear phase). Reduces aliasing; adds latency, which is reported to the host."),
+      curveBox (p.apvts, id::curve,
+                "Waveshaper curve for the saturate bands.\nTanh: smooth, tube / transformer-like.\nAtan: more open, tape-like.\n"
+                "Soft: algebraic knee, gritty, strongest upper odd harmonics."),
+      deltaButton (p.apvts, id::delta, "DELTA",
+                   "Listen to only what the plugin adds (wet minus dry). Use it to hear exactly what the harmonics are doing."),
+      matchButton (p.apvts, id::match, "GAIN MATCH",
+                   "Matches the processed loudness to the dry signal so 'louder' doesn't sound 'better'.")
 {
     setLookAndFeel (&look);
     addAndMakeVisible (spectrum);
@@ -92,10 +103,6 @@ HephaestusEditor::HephaestusEditor (HephaestusProcessor& p)
         slot = std::make_unique<ui::Knob> (ui::Knob::Layout::below);
         addChildComponent (*slot);
     }
-
-    addChoiceBox (curveBox, curveAttachment, id::curve,
-                  "Waveshaper curve for the saturate bands.\nTanh: smooth, tube / transformer-like.\nAtan: more open, tape-like.\n"
-                  "Soft: algebraic knee, gritty, strongest upper odd harmonics.");
 
     // Band panel buttons.
     saturateModeButton.setButtonText ("SATURATE");
@@ -125,14 +132,8 @@ HephaestusEditor::HephaestusEditor (HephaestusProcessor& p)
     presetBox.setTooltip ("Presets. Global settings (gain, mix, stereo mode, oversampling) are kept.");
     addAndMakeVisible (presetBox);
 
-    addChoiceBox (stereoBox, stereoAttachment, id::stereo,
-                  "Mid/Side saturates the centre and sides together; harmonic fill bands then work on the mid channel only, keeping bass centred.");
-    addChoiceBox (osBox, osAttachment, id::oversampling,
-                  "Oversampling for the saturate bands (linear phase). Reduces aliasing; adds latency, which is reported to the host.");
-    addToggle (deltaButton, deltaAttachment, id::delta, "DELTA",
-               "Listen to only what the plugin adds (wet minus dry). Use it to hear exactly what the harmonics are doing.");
-    addToggle (matchButton, matchAttachment, id::match, "GAIN MATCH",
-               "Matches the processed loudness to the dry signal so 'louder' doesn't sound 'better'.");
+    for (auto* c : std::initializer_list<juce::Component*> { &stereoBox, &osBox, &curveBox, &deltaButton, &matchButton })
+        addAndMakeVisible (c);
 
     // The first band that exists is the one to show.
     for (int i = 0; i < maxBands; ++i)
@@ -158,28 +159,6 @@ void HephaestusEditor::addKnob (const char* paramId, const char* caption, const 
     auto knob = std::make_unique<ui::Knob> (proc.apvts, paramId, caption, tooltip, ui::Knob::Layout::below);
     addAndMakeVisible (*knob);
     knobs.push_back (std::move (knob));
-}
-
-void HephaestusEditor::addToggle (juce::TextButton& b, std::unique_ptr<ButtonAttachment>& a, const char* paramId,
-                                  const juce::String& text, const juce::String& tooltip)
-{
-    b.setButtonText (text);
-    b.setClickingTogglesState (true);
-    b.setTooltip (tooltip);
-    a = std::make_unique<ButtonAttachment> (proc.apvts, paramId, b);
-    addAndMakeVisible (b);
-}
-
-// The items come from the parameter itself, so the choices are defined once (in Parameters.h).
-void HephaestusEditor::addChoiceBox (juce::ComboBox& box, std::unique_ptr<ComboAttachment>& attachment,
-                                     const char* paramId, const juce::String& tooltip)
-{
-    if (auto* choice = dynamic_cast<juce::AudioParameterChoice*> (proc.apvts.getParameter (paramId)))
-        box.addItemList (choice->choices, 1);
-
-    box.setTooltip (tooltip);
-    attachment = std::make_unique<ComboAttachment> (proc.apvts, paramId, box);
-    addAndMakeVisible (box);
 }
 
 // What changes the band panel: which band, whether it exists, and its mode.
@@ -398,7 +377,7 @@ void HephaestusEditor::paint (juce::Graphics& g)
             g.setColour (colours::text);
             g.drawRoundedRectangle (r.expanded (1.5f), 4.0f, 1.2f);
         }
-        g.setColour (on ? juce::Colour (0xff1c1300) : colours::dim);
+        g.setColour (on ? colours::lampInk : colours::dim);
         g.setFont (ui::labelFont (11.5f));
         g.drawText (juce::String (i + 1), r, juce::Justification::centred, false);
     }

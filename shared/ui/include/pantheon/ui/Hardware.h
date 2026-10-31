@@ -10,8 +10,8 @@
 
 // The look of the plugins: a piece of studio hardware with a digital brain. Brushed-metal faceplates with screws, recessed
 // glass windows for everything that is a display, lamps for every verdict, switches that light up. Everything here is
-// drawn from code (no image or font files ship with the plugin), and nothing is random at run time, so the screenshots in
-// docs/ are reproducible.
+// drawn from code (no image or font files ship with a plugin), and nothing is random at run time, so the screenshots in
+// each plugin's docs/ are reproducible.
 //
 // Colour roles: warm graphite metal for the chassis, cream "silkscreen" for engraved labels, amber for the digital
 // read-outs (the numbers), teal phosphor for the graphs and the scope (the data), and the three lamp colours for verdicts.
@@ -27,6 +27,7 @@ inline const juce::Colour amber { 0xffffb347 };        // digital read-outs and 
 inline const juce::Colour good { 0xff5fd68c };
 inline const juce::Colour warn { 0xfff2a33a };
 inline const juce::Colour bad { 0xffef4a3d };
+inline const juce::Colour lampInk { 0xff1c1300 };      // dark print on a lit (bright) lamp or switch
 inline const juce::Colour glass { 0xff090d0d };        // a display that is off
 inline const juce::Colour glassGrid { 0xff1c2a29 };    // graticule lines on the glass
 } // namespace colours

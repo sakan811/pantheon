@@ -94,17 +94,36 @@ private:
     std::unique_ptr<Apvts::SliderAttachment> attachment;
 };
 
-// A selector bound to a choice parameter, drawn by HardwareLookAndFeel as a window of glass.
+// A selector bound to a choice parameter, drawn by HardwareLookAndFeel as a window of glass. The items come from the parameter
+// itself, so the list of choices is defined once, where the parameter is.
 class Choice : public juce::ComboBox
 {
 public:
-    Choice (Apvts& state, const juce::String& paramId, const juce::StringArray& items)
+    Choice (Apvts& state, const juce::String& paramId, const juce::String& tooltip = {})
     {
-        addItemList (items, 1);
+        if (auto* choice = dynamic_cast<juce::AudioParameterChoice*> (state.getParameter (paramId)))
+            addItemList (choice->choices, 1);
+        setTooltip (tooltip);
         attachment = std::make_unique<Apvts::ComboBoxAttachment> (state, paramId, *this);
     }
 
 private:
     std::unique_ptr<Apvts::ComboBoxAttachment> attachment;
+};
+
+// A push switch bound to a bool parameter: it lights up while the parameter is on.
+class Toggle : public juce::TextButton
+{
+public:
+    Toggle (Apvts& state, const juce::String& paramId, const juce::String& text, const juce::String& tooltip)
+    {
+        setButtonText (text);
+        setTooltip (tooltip);
+        setClickingTogglesState (true);
+        attachment = std::make_unique<Apvts::ButtonAttachment> (state, paramId, *this);
+    }
+
+private:
+    std::unique_ptr<Apvts::ButtonAttachment> attachment;
 };
 } // namespace ui

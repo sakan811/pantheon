@@ -1,6 +1,6 @@
 # Pantheon Suite
 
-A monorepo of mastering and music plugins named after Greek gods, built with [JUCE](https://juce.com) 8 and licensed
+A monorepo of mastering and music plugins named after Greek gods, built with [JUCE](https://juce.com) and licensed
 under the AGPL-3.0-or-later. It holds source only: no binaries or downloads.
 
 | Plugin | What it is |

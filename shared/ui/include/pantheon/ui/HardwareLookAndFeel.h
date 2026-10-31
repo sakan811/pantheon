@@ -27,7 +27,7 @@ public:
         setColour (juce::TextButton::buttonColourId, colours::panelEdge);
         setColour (juce::TextButton::buttonOnColourId, colours::amber);
         setColour (juce::TextButton::textColourOffId, colours::text);
-        setColour (juce::TextButton::textColourOnId, juce::Colour (0xff1c1300));
+        setColour (juce::TextButton::textColourOnId, colours::lampInk);
         setColour (juce::TooltipWindow::backgroundColourId, colours::glass);
         setColour (juce::TooltipWindow::textColourId, colours::text);
         setColour (juce::TooltipWindow::outlineColourId, colours::amber.withAlpha (0.45f));

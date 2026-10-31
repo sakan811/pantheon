@@ -351,7 +351,7 @@ private:
     {
         ui::hw::drawPushButton (g, r, active, colours::amber);
         g.setFont (labelFont (9.5f));
-        g.setColour (active ? juce::Colour (0xff1c1300) : colours::text);
+        g.setColour (active ? colours::lampInk : colours::text);
         g.drawText (text.toUpperCase(), r.toNearestInt(), juce::Justification::centred);
     }
 
