@@ -1529,6 +1529,20 @@ TEST (clip_meter_ignores_clean_audio_and_finds_hard_clipping)
     CHECK (w2.clipEvents > 3500 && w2.clipEvents < 4500);
 }
 
+TEST (clip_meter_ignores_non_finite_samples)
+{
+    // A glitched buffer (NaN, +/-inf) is not clipping and must not pin the peak at +inf for the rest of the session.
+    const double fs = 48000;
+    auto tone = sine (fs, 997, -6.0, 1.0);
+    tone[1000] = std::nanf ("");
+    tone[2000] = std::numeric_limits<float>::infinity();
+    tone[3000] = -std::numeric_limits<float>::infinity();
+    const auto w = clipOf (tone, tone);
+    CHECK (std::isfinite (w.samplePeak) && std::isfinite (w.truePeak));
+    CHECK_NEAR (linToDb (w.samplePeak), -6.0, 0.05);
+    CHECK (w.overSamples == 0 && w.clipEvents == 0);
+}
+
 TEST (clip_meter_counts_overs_and_inter_sample_peaks)
 {
     const double fs = 48000;
@@ -2051,10 +2065,53 @@ TEST (loudness_monitor_tracks_the_loudest_section)
     CHECK (m.integrated() > -14.0f); // the relative gate drops the quiet part from the integrated value
 }
 
+TEST (loudness_monitor_recovers_from_non_finite_samples)
+{
+    const double fs = 48000.0;
+    LoudnessMonitor m;
+    m.prepare (fs);
+    const auto first = sine (fs, 997, -20, 5.0), second = sine (fs, 997, -10, 10.0);
+    m.process (first.data(), first.data(), static_cast<int> (first.size()));
+    const float before = m.integrated();
+    CHECK_NEAR (before, -20.0, 0.2);
+
+    // A burst of NaN and inf, as a host hands over on a glitch, must not freeze the meter: a NaN in the K-weighting
+    // filters would stay there for good, leaving the short-term value NaN and the integrated one stuck.
+    std::vector<float> bad (480, std::nanf (""));
+    for (size_t i = 0; i < bad.size(); i += 2)
+        bad[i] = std::numeric_limits<float>::infinity();
+    m.process (bad.data(), bad.data(), static_cast<int> (bad.size()));
+    m.process (second.data(), second.data(), static_cast<int> (second.size()));
+    CHECK (m.hasData());
+    CHECK (std::isfinite (m.shortTerm()));
+    CHECK_NEAR (m.shortTerm(), -10.0, 0.3);
+    CHECK (m.integrated() > before + 3.0f); // follows the louder passage that came after
+}
+
+TEST (loudness_monitor_reads_as_cleared_while_a_reset_is_pending)
+{
+    const double fs = 48000.0;
+    LoudnessMonitor m;
+    m.prepare (fs);
+    const auto tone = sine (fs, 997, -14, 6.0);
+    m.process (tone.data(), tone.data(), static_cast<int> (tone.size()));
+    CHECK (m.hasData() && m.seconds() > 5.0 && m.maxShortTerm() > -20.0f);
+
+    // No audio flows (a stopped host), yet every reader must already see the cleared meter, not the old programme: the
+    // master plan counts these seconds, and a plan built on stale ones next to a cleared CLIPPING cell is the "stuck" UI.
+    m.requestReset();
+    CHECK (!m.hasData());
+    CHECK (m.seconds() == 0.0);
+    CHECK (m.integrated() <= LoudnessMeter::kSilence && m.shortTerm() <= LoudnessMeter::kSilence && m.maxShortTerm() <= LoudnessMeter::kSilence);
+
+    m.process (tone.data(), tone.data(), 64);
+    CHECK (m.seconds() > 0.0 && m.seconds() < 0.1);
+}
+
 // ---- master advisor ----------------------------------------------------------------------------------------------
 namespace
 {
-// A programme that measures clean everywhere: on target, mono-safe, no clips, at the delivery loudness.
+// A programme that measures clean everywhere: mono-safe, no clips, at the delivery loudness.
 MasterInputs cleanMaster()
 {
     MasterInputs in;
@@ -2064,9 +2121,6 @@ MasterInputs cleanMaster()
     in.clip.have = true;
     in.clip.truePeakDb = -1.5f;
     in.clip.samplePeakDb = -1.8f;
-    in.haveTonal = true;
-    in.target = TargetCurve::builtIns()[1];
-    in.measured = in.target.medianDb;
     in.translation.haveFold = true;
     in.haveCrest = true;
     in.lowCrestDb = 8.0f;
@@ -2158,46 +2212,6 @@ TEST (advisor_compares_loudness_with_the_delivery_target)
     CHECK (pick (in, Topic::loudness) == nullptr);
 }
 
-TEST (advisor_points_at_the_region_that_is_out_of_tolerance)
-{
-    auto in = cleanMaster();
-    const auto& t = in.target;
-    // +4 dB over 250 - 630 Hz.
-    for (int i = 0; i < BandGrid::kNum; ++i)
-        if (BandGrid::centreHz (i) >= 250.0 && BandGrid::centreHz (i) <= 630.0)
-            in.measured[static_cast<size_t> (i)] += 4.0f;
-    const auto a = advise (in);
-    const auto* tonal = find (a, Topic::tonal);
-    CHECK (tonal != nullptr);
-    if (tonal != nullptr)
-    {
-        CHECK (tonal->headline.rfind ("Cut about", 0) == 0);
-        CHECK (tonal->headline.find ("bell") != std::string::npos);
-        CHECK (tonal->hear.solo == Switches::bit (Source::lowMid)); // 250 - 630 Hz is in LOW-MID
-        CHECK (tonal->why.find (t.name) != std::string::npos);
-        CHECK (tonal->level != Level::good);
-    }
-    // The cut is the amount that brings the region back inside the tolerance: less than the whole +4 dB.
-    CHECK (tonal != nullptr && tonal->headline.find ("4.0 dB") == std::string::npos);
-
-    // A hole in the highs reads as a boost, and runs to the top of the curve: a shelf.
-    in = cleanMaster();
-    for (int i = 0; i < BandGrid::kNum; ++i)
-        if (BandGrid::centreHz (i) >= 9000.0)
-            in.measured[static_cast<size_t> (i)] -= 9.0f;
-    in.maxHz = 20000.0;
-    const auto* high = pick (in, Topic::tonal);
-    CHECK (high != nullptr && high->headline.rfind ("Boost about", 0) == 0 && high->headline.find ("high shelf") != std::string::npos);
-
-    // Bands beyond the signal's Nyquist are not judged.
-    in = cleanMaster();
-    for (int i = 0; i < BandGrid::kNum; ++i)
-        if (BandGrid::centreHz (i) >= 9000.0)
-            in.measured[static_cast<size_t> (i)] = -200.0f;
-    in.maxHz = 8000.0;
-    CHECK (pick (in, Topic::tonal) == nullptr);
-}
-
 TEST (advisor_speaks_for_each_stereo_problem)
 {
     auto in = cleanMaster();
@@ -2274,19 +2288,37 @@ TEST (advisor_reads_the_low_end_dynamics_and_the_history)
     CHECK (bass != nullptr && bass->headline.find ("under 40 Hz") != std::string::npos && bass->hear.solo == Switches::bit (Source::low));
 }
 
-TEST (advisor_checks_the_selected_device)
+TEST (advisor_lists_faults_not_differences_from_the_reference_curve)
 {
+    // The device preview is measured against the reference curve, so even a bad DEVICE LOSS is not a to-do; the same goes
+    // for the tonal curve (there are no inputs for it any more). The mono fold is a fault and is still listed.
     auto in = cleanMaster();
     in.translation.haveDevice = true;
-    in.translation.extraLossDb = 4.0f;
+    in.translation.extraLossDb = 6.0f;
     in.translation.deviceLevel = Level::bad;
-    in.deviceName = "Phone speaker";
-    const auto* d = pick (in, Topic::device);
-    CHECK (d != nullptr && d->headline.find ("Phone speaker") != std::string::npos && d->why.find ("4.0 dB more") != std::string::npos);
-    in.translation.deviceLevel = Level::good;
-    CHECK (pick (in, Topic::device) == nullptr);
+    const auto a = advise (in);
+    CHECK (a.items.empty() && a.level() == Level::good);
+
+    in.translation.monoLevel = Level::bad;
+    in.translation.monoLossDb = 5.0f;
+    CHECK (pick (in, Topic::monoFold) != nullptr);
 }
 
+TEST (mono_fold_report_needs_no_target_or_device)
+{
+    BandArray measured {}, fold {};
+    for (int i = 0; i < BandGrid::kNum; ++i)
+    {
+        measured[static_cast<size_t> (i)] = -20.0f;
+        fold[static_cast<size_t> (i)] = BandGrid::centreHz (i) < 100.0 ? -6.0f : 0.0f; // the low end cancels in mono
+    }
+    TranslationReport alone;
+    addMonoFold (alone, measured, fold);
+    const auto full = analyseTranslation (measured, &fold, TargetCurve::builtIns().front(), nullptr);
+    CHECK (alone.haveFold && !alone.haveDevice);
+    CHECK (alone.lowMonoLossDb > 3.0f && alone.lowMonoLevel != Level::good);
+    CHECK (alone.monoLossDb == full.monoLossDb && alone.lowMonoLossDb == full.lowMonoLossDb && alone.worstBand == full.worstBand);
+}
 
 int main()
 {
